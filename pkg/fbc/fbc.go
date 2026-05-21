@@ -150,7 +150,11 @@ func MarshalPackages(packages []*Package, output io.Writer, format string) error
 		return nil
 	}
 
-	jsonBytes, err := json.MarshalIndent(packages, "", "  ")
+	var v any = packages
+	if len(packages) == 1 {
+		v = packages[0]
+	}
+	jsonBytes, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling JSON: %w", err)
 	}

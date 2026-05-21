@@ -109,6 +109,33 @@ func TestDumpLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFilterByPackageNames(t *testing.T) {
+	c := &Catalog{Data: []Product{
+		{Name: "A", Package: "pkg-a"},
+		{Name: "B", Package: "pkg-b"},
+		{Name: "C", Package: "pkg-c"},
+		{Name: "D", Package: "pkg-d"},
+	}}
+	c.FilterByPackageNames([]string{"pkg-a", "pkg-c"})
+	if len(c.Data) != 2 {
+		t.Fatalf("got %d products, want 2", len(c.Data))
+	}
+	if c.Data[0].Package != "pkg-a" || c.Data[1].Package != "pkg-c" {
+		t.Errorf("unexpected packages: %q, %q", c.Data[0].Package, c.Data[1].Package)
+	}
+}
+
+func TestFilterByPackageNamesNoMatch(t *testing.T) {
+	c := &Catalog{Data: []Product{
+		{Name: "A", Package: "pkg-a"},
+		{Name: "B", Package: "pkg-b"},
+	}}
+	c.FilterByPackageNames([]string{"nonexistent"})
+	if len(c.Data) != 0 {
+		t.Fatalf("got %d products, want 0", len(c.Data))
+	}
+}
+
 func TestSortByPackage(t *testing.T) {
 	c := &Catalog{Data: []Product{
 		{Package: "zebra"},

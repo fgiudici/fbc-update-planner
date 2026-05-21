@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/release-engineering/fbc-update-planner/pkg/fbc"
 	"github.com/release-engineering/fbc-update-planner/pkg/plcc"
@@ -33,12 +34,14 @@ func main() {
 	var writePath string
 	var format string
 	var logPath string
+	var packages string
 	var plccDumpPath string
 	var inputPath string
 
 	flag.StringVar(&writePath, "w", "", "write FBC data to a file (required)")
 	flag.StringVar(&format, "o", "json", "output format: json or yaml")
 	flag.StringVar(&logPath, "l", "", "write operational logs to a file (default: stdout)")
+	flag.StringVar(&packages, "p", "", "comma-separated list of package names to include")
 	flag.StringVar(&inputPath, "i", "", "read PLCC JSON input from a file instead of fetching from API")
 	flag.StringVar(&plccDumpPath, "dump-plcc", "", "dump filtered PLCC JSON to a file")
 	flag.Parse()
@@ -84,7 +87,18 @@ func main() {
 	}
 
 	slog.Info("fetched products from PLCC", "count", catalog.Len())
-	catalog.FilterPackages()
+	if packages != "" {
+		var names []string
+		for _, name := range strings.Split(packages, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		catalog.FilterByPackageNames(names)
+	} else {
+		catalog.FilterPackages()
+	}
 	slog.Info("filtered packages", "count", catalog.Len())
 	catalog.SortByPackage()
 

@@ -110,6 +110,22 @@ func (c *Catalog) FilterPackages() {
 	c.Data = filtered
 }
 
+// FilterByPackageNames keeps only products whose package name is in the provided list,
+// modifying the catalog in place.
+func (c *Catalog) FilterByPackageNames(names []string) {
+	allowed := make(map[string]bool, len(names))
+	for _, name := range names {
+		allowed[name] = true
+	}
+	filtered := c.Data[:0]
+	for _, p := range c.Data {
+		if allowed[p.Package] {
+			filtered = append(filtered, p)
+		}
+	}
+	c.Data = filtered
+}
+
 // Len returns the number of products currently in the catalog.
 func (c *Catalog) Len() int {
 	return len(c.Data)
