@@ -151,6 +151,14 @@ func TestSortByPackage(t *testing.T) {
 	}
 }
 
+// mockSleep disables retry backoff delays for the duration of the test.
+func mockSleep(t *testing.T) {
+	t.Helper()
+	original := sleepFunc
+	sleepFunc = func(time.Duration) {}
+	t.Cleanup(func() { sleepFunc = original })
+}
+
 func TestFetchFrom(t *testing.T) {
 	catalog := &Catalog{Data: []Product{
 		{Name: "Test Product", Package: "test-pkg", Versions: []Version{
@@ -177,14 +185,59 @@ func TestFetchFrom(t *testing.T) {
 }
 
 func TestFetchFromHTTPError(t *testing.T) {
+	mockSleep(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 
 	_, err := FetchFrom(srv.URL, srv.Client())
 	if err == nil {
-		t.Fatal("expected error for HTTP 500, got nil")
+		t.Fatal("expected error for HTTP 404, got nil")
+	}
+}
+
+func TestFetchFromHTTPErrorRetries(t *testing.T) {
+	mockSleep(t)
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, err := FetchFrom(srv.URL, srv.Client())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestFetchFromRetry(t *testing.T) {
+	mockSleep(t)
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(&Catalog{Data: []Product{{Package: "retry-pkg"}}})
+	}))
+	defer srv.Close()
+
+	got, err := FetchFrom(srv.URL, srv.Client())
+	if err != nil {
+		t.Fatalf("FetchFrom failed after retries: %v", err)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+	if got.Data[0].Package != "retry-pkg" {
+		t.Errorf("got package %q, want %q", got.Data[0].Package, "retry-pkg")
 	}
 }
 

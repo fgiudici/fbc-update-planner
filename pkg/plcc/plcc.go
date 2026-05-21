@@ -64,8 +64,31 @@ func Fetch() (*Catalog, error) {
 	return FetchFrom(APIURL, &http.Client{Timeout: 30 * time.Second})
 }
 
+var sleepFunc = time.Sleep
+
 // FetchFrom retrieves the product catalog from the given URL using the provided HTTP client.
+// It retries up to 3 times with exponential backoff on errors.
 func FetchFrom(url string, client *http.Client) (*Catalog, error) {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := range maxRetries {
+		if attempt > 0 {
+			// attempt 1: 60s, attempt 2: 120s
+			sleepFunc(time.Duration(60<<(attempt-1)) * time.Second)
+		}
+
+		catalog, err := fetch(url, client)
+		if err == nil {
+			return catalog, nil
+		}
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("after %d attempts: %w", maxRetries, lastErr)
+}
+
+func fetch(url string, client *http.Client) (*Catalog, error) {
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
