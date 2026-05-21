@@ -29,16 +29,21 @@ const packageNotFound = 1
 
 func main() {
 	var writePath string
+	var format string
 	var plccDumpPath string
 	var inputPath string
 
 	flag.StringVar(&writePath, "w", "", "write FBC data to a file (required)")
+	flag.StringVar(&format, "o", "json", "output format: json or yaml")
 	flag.StringVar(&inputPath, "i", "", "read PLCC JSON input from a file instead of fetching from API")
 	flag.StringVar(&plccDumpPath, "dump-plcc", "", "dump filtered PLCC JSON to a file")
 	flag.Parse()
 
 	if writePath == "" {
 		log.Fatal("-w flag is required: specify an output file path")
+	}
+	if format != "json" && format != "yaml" {
+		log.Fatalf("-o flag must be \"json\" or \"yaml\", got %q", format)
 	}
 
 	f, err := os.Create(writePath)
@@ -71,7 +76,7 @@ func main() {
 		return
 	}
 
-	blobCount, err := fbc.GenerateFBC(catalog.Data, output, os.Stderr)
+	blobCount, err := fbc.GenerateFBC(catalog.Data, output, os.Stderr, format)
 	if err != nil {
 		log.Fatalf("failed to generate FBC: %v", err)
 	}

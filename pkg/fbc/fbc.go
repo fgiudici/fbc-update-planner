@@ -123,9 +123,14 @@ func translatePhase(ph plcc.Phase) Phase {
 	return Phase{Name: ph.Name, StartDate: start, EndDate: end}
 }
 
-// GenerateFBC converts PLCC products to FBC YAML, writing valid packages to output
-// and validation failures as JSON to logOutput. Returns the number of emitted FBC blobs.
-func GenerateFBC(products []plcc.Product, output io.Writer, logOutput io.Writer) (int, error) {
+// GenerateFBC converts PLCC products to FBC data in the specified format ("json" or "yaml"),
+// writing valid packages to output and validation failures as JSON to logOutput.
+// Returns the number of valid packages emitted.
+func GenerateFBC(products []plcc.Product, output io.Writer, logOutput io.Writer, format string) (int, error) {
+	if format != "json" && format != "yaml" {
+		return 0, fmt.Errorf("unsupported format %q: must be \"json\" or \"yaml\"", format)
+	}
+
 	pipeline := DefaultFilters()
 
 	pkgCount := make(map[string]int)
@@ -135,7 +140,7 @@ func GenerateFBC(products []plcc.Product, output io.Writer, logOutput io.Writer)
 
 	logEnc := json.NewEncoder(logOutput)
 	alreadyLogged := make(map[string]bool)
-	blobCount := 0
+	validPackages := make([]*Package, 0)
 	for _, product := range products {
 		if pkgCount[product.Package] > 1 {
 			if !alreadyLogged[product.Package] {
@@ -160,26 +165,34 @@ func GenerateFBC(products []plcc.Product, output io.Writer, logOutput io.Writer)
 			continue
 		}
 
-		yamlBytes, err := yaml.Marshal(pkg)
-		if err != nil {
-			logEnc.Encode(ValidationResult{
-				PackageName: product.Package,
-				Valid:       false,
-				Reasons:     []string{fmt.Sprintf("failed to marshal YAML: %v", err)},
-			})
-			continue
-		}
-
-		if blobCount > 0 {
-			yamlBytes = append([]byte("---\n"), yamlBytes...)
-		}
-		if _, err := output.Write(yamlBytes); err != nil {
-			return blobCount, fmt.Errorf("writing YAML for package %q: %w", product.Package, err)
-		}
-		blobCount++
+		validPackages = append(validPackages, pkg)
 	}
 
-	return blobCount, nil
+	if format == "yaml" {
+		for i, pkg := range validPackages {
+			yamlBytes, err := yaml.Marshal(pkg)
+			if err != nil {
+				return i, fmt.Errorf("marshaling package %q: %w", pkg.Name, err)
+			}
+			if i > 0 {
+				yamlBytes = append([]byte("---\n"), yamlBytes...)
+			}
+			if _, err := output.Write(yamlBytes); err != nil {
+				return i, fmt.Errorf("writing package %q: %w", pkg.Name, err)
+			}
+		}
+	} else {
+		jsonBytes, err := json.MarshalIndent(validPackages, "", "  ")
+		if err != nil {
+			return 0, fmt.Errorf("marshaling JSON: %w", err)
+		}
+		jsonBytes = append(jsonBytes, '\n')
+		if _, err := output.Write(jsonBytes); err != nil {
+			return 0, fmt.Errorf("writing JSON: %w", err)
+		}
+	}
+
+	return len(validPackages), nil
 }
 
 func compareMajorMinor(a, b string) int {

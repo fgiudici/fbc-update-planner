@@ -37,7 +37,7 @@ func TestReferenceFile(t *testing.T) {
 	catalog.SortByPackage()
 
 	var buf bytes.Buffer
-	if _, err := GenerateFBC(catalog.Data, &buf, io.Discard); err != nil {
+	if _, err := GenerateFBC(catalog.Data, &buf, io.Discard, "yaml"); err != nil {
 		t.Fatalf("generating FBC: %v", err)
 	}
 
@@ -50,5 +50,31 @@ func TestReferenceFile(t *testing.T) {
 		t.Errorf("FBC output does not match reference file (got %d bytes, want %d bytes)", buf.Len(), len(want))
 		os.WriteFile("testdata/actual-fbc.yaml", buf.Bytes(), 0644)
 		t.Log("actual output written to testdata/actual-fbc.yaml")
+	}
+}
+
+func TestReferenceFileJSON(t *testing.T) {
+	catalog, err := plcc.Load("testdata/plcc.json")
+	if err != nil {
+		t.Fatalf("loading PLCC test data: %v", err)
+	}
+
+	catalog.FilterPackages()
+	catalog.SortByPackage()
+
+	var buf bytes.Buffer
+	if _, err := GenerateFBC(catalog.Data, &buf, io.Discard, "json"); err != nil {
+		t.Fatalf("generating FBC: %v", err)
+	}
+
+	want, err := os.ReadFile("testdata/reference-fbc.json")
+	if err != nil {
+		t.Fatalf("reading reference file: %v", err)
+	}
+
+	if buf.String() != string(want) {
+		t.Errorf("FBC JSON output does not match reference file (got %d bytes, want %d bytes)", buf.Len(), len(want))
+		os.WriteFile("testdata/actual-fbc.json", buf.Bytes(), 0644)
+		t.Log("actual output written to testdata/actual-fbc.json")
 	}
 }
