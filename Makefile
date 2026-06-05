@@ -1,5 +1,6 @@
 GOFLAGS := -trimpath
-DATE    := $(shell date +%y%m%d)
+DATE       := $(shell date +%y%m%d)
+DEST_IMAGE ?= quay.io/updateplanner/catalog:latest
 
 .PHONY: build
 build: plcc2fbc
@@ -11,6 +12,10 @@ plcc2fbc:
 .PHONY: test
 test:
 	go test -v ./...
+
+.PHONY: build-catalog
+build-catalog: plcc2fbc
+	./scripts/build-catalog.sh $(DEST_IMAGE)
 
 .PHONY: generate-fbc
 generate-fbc: plcc2fbc
