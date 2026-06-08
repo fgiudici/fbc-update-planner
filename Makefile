@@ -1,6 +1,11 @@
 GOFLAGS := -trimpath
 DATE    := $(shell date +%y%m%d)
 
+CONTAINER_ENGINE ?= podman
+IMAGE_NAME       ?= quay.io/updateplanner/plcc2fbc
+IMAGE_TAG        ?= latest
+IMAGE            := $(IMAGE_NAME):$(IMAGE_TAG)
+
 .PHONY: build
 build: plcc2fbc
 
@@ -18,3 +23,12 @@ generate-fbc: plcc2fbc
 	cp -f fbc-samples/fbc-$(DATE).yaml fbc-samples/fbc-latest.yaml
 	cp -f fbc-samples/fbc-$(DATE).log fbc-samples/fbc-latest.log
 	cp -f fbc-samples/fbc-$(DATE).validation.log fbc-samples/fbc-latest.validation.log
+
+.PHONY: image-build
+image-build:
+	@echo "NOTE: VPN connection is required to download the Red Hat IT CA certificate"
+	$(CONTAINER_ENGINE) build -t $(IMAGE) -f Dockerfile .
+
+.PHONY: image-push
+image-push:
+	$(CONTAINER_ENGINE) push $(IMAGE)
