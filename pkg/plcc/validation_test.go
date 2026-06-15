@@ -82,6 +82,7 @@ func TestLookupValidators(t *testing.T) {
 		{"REQ-DATE-03 returns prod", []string{"REQ-DATE-03"}, true, false, false},
 		{"mixed returns both", []string{"syntax", "REQ-VAL-01"}, true, true, false},
 		{"unknown errors", []string{"NOPE"}, false, false, true},
+		{"dedup group+label", []string{"syntax", "REQ-DATE-02"}, true, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,6 +101,13 @@ func TestLookupValidators(t *testing.T) {
 			}
 		})
 	}
+	t.Run("dedup does not duplicate validators", func(t *testing.T) {
+		syntaxOnly, _, _ := LookupValidators("syntax")
+		withDup, _, _ := LookupValidators("syntax", "REQ-DATE-02")
+		if len(withDup) != len(syntaxOnly) {
+			t.Errorf("syntax,REQ-DATE-02 should equal syntax alone: got %d, want %d", len(withDup), len(syntaxOnly))
+		}
+	})
 }
 
 
@@ -585,7 +593,7 @@ func TestValidateHasVersions(t *testing.T) {
 	}
 }
 
-// --- CUSTOM-03 ---
+// --- REQ-DATE-04 ---
 
 func TestValidatePointInTimePhases(t *testing.T) {
 	tests := []struct {
@@ -620,7 +628,7 @@ func TestValidatePointInTimePhases(t *testing.T) {
 	}
 }
 
-// --- CUSTOM-04 ---
+// --- CUSTOM-03 ---
 
 func TestValidatePhaseEndAfterStart(t *testing.T) {
 	tests := []struct {
@@ -651,7 +659,7 @@ func TestValidatePhaseEndAfterStart(t *testing.T) {
 	}
 }
 
-// --- CUSTOM-05 ---
+// --- CUSTOM-04 ---
 
 func TestValidateOCPFormatAll(t *testing.T) {
 	tests := []struct {

@@ -144,32 +144,39 @@ var catalogValidatorRegistry = []catalogValidatorEntry{
 // Accepted labels: any label in either registry (e.g. "REQ-DATE-03", "REQ-VAL-01").
 // Returns an error if any name is unknown.
 func LookupValidators(names ...string) ([]Validator, []CatalogValidator, error) {
-	var prodResult []Validator
-	var catResult []CatalogValidator
+	labels := make(map[string]bool)
 	for _, name := range names {
 		switch name {
 		case "all":
-			prodResult = append(prodResult, DefaultValidators()...)
-			catResult = append(catResult, DefaultCatalogValidators()...)
-		case "syntax":
-			prodResult = append(prodResult, SyntaxValidators()...)
-		case "semantic":
-			prodResult = append(prodResult, SemanticValidators()...)
+			for _, e := range validatorRegistry {
+				labels[e.Label] = true
+			}
+			for _, e := range catalogValidatorRegistry {
+				labels[e.Label] = true
+			}
+		case "syntax", "semantic":
+			for _, e := range validatorRegistry {
+				if e.Group == name {
+					labels[e.Label] = true
+				}
+			}
 		case "catalog":
-			catResult = append(catResult, catalogValidatorsByGroup("catalog")...)
+			for _, e := range catalogValidatorRegistry {
+				if e.Group == name {
+					labels[e.Label] = true
+				}
+			}
 		default:
 			found := false
-			for _, entry := range validatorRegistry {
-				if entry.Label == name {
-					prodResult = append(prodResult, entry.Validators...)
+			for _, e := range validatorRegistry {
+				if e.Label == name {
 					found = true
 					break
 				}
 			}
 			if !found {
-				for _, entry := range catalogValidatorRegistry {
-					if entry.Label == name {
-						catResult = append(catResult, entry.Validators...)
+				for _, e := range catalogValidatorRegistry {
+					if e.Label == name {
 						found = true
 						break
 					}
@@ -178,6 +185,19 @@ func LookupValidators(names ...string) ([]Validator, []CatalogValidator, error) 
 			if !found {
 				return nil, nil, fmt.Errorf("unknown validator %q", name)
 			}
+			labels[name] = true
+		}
+	}
+	var prodResult []Validator
+	for _, e := range validatorRegistry {
+		if labels[e.Label] {
+			prodResult = append(prodResult, e.Validators...)
+		}
+	}
+	var catResult []CatalogValidator
+	for _, e := range catalogValidatorRegistry {
+		if labels[e.Label] {
+			catResult = append(catResult, e.Validators...)
 		}
 	}
 	return prodResult, catResult, nil
