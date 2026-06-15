@@ -16,7 +16,10 @@ limitations under the License.
 
 package plcc
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateProduct(t *testing.T) {
 	always := func(p Product) []string { return []string{"always"} }
@@ -34,12 +37,79 @@ func TestValidateProduct(t *testing.T) {
 }
 
 func TestCatalogValidate(t *testing.T) {
-	catalog := &Catalog{Data: []Product{
-		{Package: "dup-pkg"}, {Package: "dup-pkg"}, {Package: "unique-pkg"},
-	}}
-	reasons := catalog.Validate(ValidateNoDuplicates)
-	if len(reasons) != 1 {
-		t.Errorf("expected 1 reason for duplicate, got %d: %v", len(reasons), reasons)
+	t.Run("non-strict warns without filtering", func(t *testing.T) {
+		catalog := &Catalog{Data: []Product{
+			{Package: "dup-pkg"}, {Package: "dup-pkg"}, {Package: "unique-pkg"},
+		}}
+		reasons := catalog.Validate(false, ValidateNoDuplicates)
+		if len(reasons) != 1 {
+			t.Errorf("expected 1 reason for duplicate, got %d: %v", len(reasons), reasons)
+		}
+		if len(catalog.Data) != 3 {
+			t.Errorf("expected 3 products unchanged, got %d", len(catalog.Data))
+		}
+	})
+	t.Run("strict filters duplicates in place", func(t *testing.T) {
+		catalog := &Catalog{Data: []Product{
+			{Package: "dup-pkg"}, {Package: "dup-pkg"}, {Package: "unique-pkg"},
+		}}
+		reasons := catalog.Validate(true, ValidateNoDuplicates)
+		if len(reasons) != 1 {
+			t.Errorf("expected 1 reason, got %d: %v", len(reasons), reasons)
+		}
+		if len(catalog.Data) != 1 {
+			t.Errorf("expected 1 product after filtering, got %d", len(catalog.Data))
+		}
+		if catalog.Data[0].Package != "unique-pkg" {
+			t.Errorf("expected unique-pkg to survive, got %q", catalog.Data[0].Package)
+		}
+	})
+}
+
+func TestLookupValidators(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      []string
+		wantProd   bool
+		wantCat    bool
+		wantErr    bool
+	}{
+		{"all returns both", []string{"all"}, true, true, false},
+		{"syntax returns prod only", []string{"syntax"}, true, false, false},
+		{"semantic returns prod only", []string{"semantic"}, true, false, false},
+		{"catalog returns cat only", []string{"catalog"}, false, true, false},
+		{"REQ-VAL-01 returns cat", []string{"REQ-VAL-01"}, false, true, false},
+		{"REQ-DATE-03 returns prod", []string{"REQ-DATE-03"}, true, false, false},
+		{"mixed returns both", []string{"syntax", "REQ-VAL-01"}, true, true, false},
+		{"unknown errors", []string{"NOPE"}, false, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prod, cat, err := LookupValidators(tt.input...)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if (len(prod) > 0) != tt.wantProd {
+				t.Errorf("prod validators: got %d, wantProd = %v", len(prod), tt.wantProd)
+			}
+			if (len(cat) > 0) != tt.wantCat {
+				t.Errorf("catalog validators: got %d, wantCat = %v", len(cat), tt.wantCat)
+			}
+		})
+	}
+}
+
+
+func TestListValidatorsIncludesCatalog(t *testing.T) {
+	output := ListValidators()
+	if !strings.Contains(output, "catalog") {
+		t.Error("ListValidators output missing 'catalog' group")
+	}
+	if !strings.Contains(output, "REQ-VAL-01") {
+		t.Error("ListValidators output missing 'REQ-VAL-01' label")
 	}
 }
 
@@ -463,9 +533,9 @@ func TestValidateNoDuplicates(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reasons := ValidateNoDuplicates(tt.products)
-			if (len(reasons) == 0) != tt.wantOK {
-				t.Errorf("ok = %v, want %v; reasons: %v", len(reasons) == 0, tt.wantOK, reasons)
+			result := ValidateNoDuplicates(tt.products)
+			if (len(result) == 0) != tt.wantOK {
+				t.Errorf("ok = %v, want %v; rejections: %v", len(result) == 0, tt.wantOK, result)
 			}
 		})
 	}

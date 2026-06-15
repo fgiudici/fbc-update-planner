@@ -8,7 +8,7 @@ This document describes the rules that `plcc2fbc` uses to validate data from the
 
 After PLCC data is fetched, each product passes through two stages:
 
-1. **PLCC-level validation** (`pkg/plcc/validation.go`): validators that check raw PLCC data quality (tier, release cadence, phase completeness, dates, duplicates). By default these produce **warnings**; with `--strict` they filter out failing packages.
+1. **PLCC-level validation** (`pkg/plcc/validation.go`): validators that check raw PLCC data quality (tier, release cadence, phase completeness, dates, duplicates). Organized into three groups: `syntax`, `semantic`, and `catalog`. By default these produce **warnings**; with `--strict` they filter out failing packages. Use `--validators` to select which validators to run (by label or group: `all`, `syntax`, `semantic`, `catalog`).
 2. **Filter pipeline** (`pkg/fbc/filter.go`): an ordered sequence of `Filter` callbacks that clean the translated FBC output (e.g., drop incomplete phases).
 
 The Filter pipeline is modular and easily extensible, see how in the ["Adding a New Filter" section](#adding-a-new-filter).
@@ -45,7 +45,7 @@ This filter always returns `nil` — it mutates the package but never rejects it
 | Condition | Stage | Effect |
 |---|---|---|
 | Product has no `package` | PLCC filtering | Silently skipped |
-| Package maps to multiple products | PLCC validation | Warning (rejected with `--strict`) |
+| Package maps to multiple products | PLCC catalog validation | Warning; with `--strict` all copies removed |
 | Phase with empty start or end date | Filter pipeline | Phase silently removed |
 
 ---
@@ -56,7 +56,7 @@ This filter always returns `nil` — it mutates the package but never rejects it
 
 Before the FBC filter pipeline runs, `main.go` calls PLCC-level validators on each raw `plcc.Product`. These validators live in `pkg/plcc/validation.go` alongside the data types they check. They produce **warnings** (logged as structured JSON to stderr) but do not block packages from FBC output. Use `--strict` to promote warnings to errors and filter out failing packages. Use `--validators` to select which validators to run (by label or group), and `--list-validators` to see available options.
 
-Validators are split into two groups via `SyntaxValidators()` (data format/structure) and `SemanticValidators()` (business/lifecycle rules). `DefaultValidators()` composes both. Catalog-level checks run via `catalog.Validate()`.
+Validators are split into three groups: `SyntaxValidators()` (data format/structure), `SemanticValidators()` (business/lifecycle rules), and `catalog` (cross-product checks). `DefaultValidators()` composes syntax + semantic; `DefaultCatalogValidators()` returns catalog-level checks. All three groups are included in `--validators all` (the default). Catalog-level checks run via `catalog.Validate()`.
 
 #### Syntax Validators
 
@@ -87,7 +87,9 @@ Validators are split into two groups via `SyntaxValidators()` (data format/struc
 | 8 | `ValidateRollingStreamPhases` | REQ-TIER-RS-01 | Rolling: Full Support with parseable dates |
 | 9 | `ValidateRollingStreamForbiddenPhases` | REQ-TIER-RS-02 | Rolling: must not include Maintenance or EUS phases |
 
-#### Catalog-Level Validators
+#### Catalog-Level Validators (group: `catalog`)
+
+Catalog validators are cross-product checks selectable via `--validators catalog` or by label (e.g. `--validators REQ-VAL-01`). They are included in `--validators all` (the default). With `--strict`, all products with a duplicated package name are removed (all copies, since we cannot determine which is authoritative).
 
 | # | Function | Label | Purpose |
 |---|----------|-------|---------|

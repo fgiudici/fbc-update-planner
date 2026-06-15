@@ -51,9 +51,12 @@ var (
 // Returns a list of warning/error strings, or nil if the product passes.
 type Validator func(Product) []string
 
+// CatalogRejections maps package names to their rejection reasons.
+// Under --strict, packages present in this map are filtered out.
+type CatalogRejections map[string][]string
+
 // CatalogValidator checks across all PLCC Products for cross-product issues.
-// Returns a list of warning/error strings, or nil if the catalog passes.
-type CatalogValidator func([]Product) []string
+type CatalogValidator func([]Product) CatalogRejections
 
 // SyntaxValidators returns validators that check data format and structure.
 func SyntaxValidators() []Validator {
@@ -83,15 +86,29 @@ func validatorsByGroup(group string) []Validator {
 
 // DefaultCatalogValidators returns the standard set of catalog-level validators.
 func DefaultCatalogValidators() []CatalogValidator {
-	return []CatalogValidator{
-		ValidateNoDuplicates, // REQ-VAL-01
+	return catalogValidatorsByGroup("catalog")
+}
+
+func catalogValidatorsByGroup(group string) []CatalogValidator {
+	var result []CatalogValidator
+	for _, entry := range catalogValidatorRegistry {
+		if entry.Group == group {
+			result = append(result, entry.Validators...)
+		}
 	}
+	return result
 }
 
 type validatorEntry struct {
 	Label      string
 	Group      string // "syntax" or "semantic"
 	Validators []Validator
+}
+
+type catalogValidatorEntry struct {
+	Label      string
+	Group      string // "catalog"
+	Validators []CatalogValidator
 }
 
 // validatorRegistry is the single source of truth for all validator labels,
@@ -117,35 +134,53 @@ var validatorRegistry = []validatorEntry{
 	{"CUSTOM-04", "syntax", []Validator{ValidateOCPFormatAll}},
 }
 
-// LookupValidators resolves a list of label or group names into validators.
-// Accepted group names: "all", "syntax", "semantic".
-// Accepted labels: any label in the validator registry (e.g. "REQ-DATE-03", "CUSTOM-01").
+var catalogValidatorRegistry = []catalogValidatorEntry{
+	{"REQ-VAL-01", "catalog", []CatalogValidator{ValidateNoDuplicates}},
+}
+
+// LookupValidators resolves a list of label or group names into per-product
+// and catalog validators.
+// Accepted group names: "all", "syntax", "semantic", "catalog".
+// Accepted labels: any label in either registry (e.g. "REQ-DATE-03", "REQ-VAL-01").
 // Returns an error if any name is unknown.
-func LookupValidators(names ...string) ([]Validator, error) {
-	var result []Validator
+func LookupValidators(names ...string) ([]Validator, []CatalogValidator, error) {
+	var prodResult []Validator
+	var catResult []CatalogValidator
 	for _, name := range names {
 		switch name {
 		case "all":
-			result = append(result, DefaultValidators()...)
+			prodResult = append(prodResult, DefaultValidators()...)
+			catResult = append(catResult, DefaultCatalogValidators()...)
 		case "syntax":
-			result = append(result, SyntaxValidators()...)
+			prodResult = append(prodResult, SyntaxValidators()...)
 		case "semantic":
-			result = append(result, SemanticValidators()...)
+			prodResult = append(prodResult, SemanticValidators()...)
+		case "catalog":
+			catResult = append(catResult, catalogValidatorsByGroup("catalog")...)
 		default:
 			found := false
 			for _, entry := range validatorRegistry {
 				if entry.Label == name {
-					result = append(result, entry.Validators...)
+					prodResult = append(prodResult, entry.Validators...)
 					found = true
 					break
 				}
 			}
 			if !found {
-				return nil, fmt.Errorf("unknown validator %q", name)
+				for _, entry := range catalogValidatorRegistry {
+					if entry.Label == name {
+						catResult = append(catResult, entry.Validators...)
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				return nil, nil, fmt.Errorf("unknown validator %q", name)
 			}
 		}
 	}
-	return result, nil
+	return prodResult, catResult, nil
 }
 
 // ListValidators returns a formatted string listing available validator
@@ -153,11 +188,15 @@ func LookupValidators(names ...string) ([]Validator, error) {
 func ListValidators() string {
 	var b strings.Builder
 	b.WriteString("Groups:\n")
-	b.WriteString("  all        all validators (syntax + semantic)\n")
+	b.WriteString("  all        all validators (syntax + semantic + catalog)\n")
 	b.WriteString("  syntax     data format and structure checks\n")
 	b.WriteString("  semantic   business/lifecycle rule checks\n")
+	b.WriteString("  catalog    cross-product catalog checks\n")
 	b.WriteString("\nLabels:\n")
 	for _, entry := range validatorRegistry {
+		fmt.Fprintf(&b, "  %-16s [%s]\n", entry.Label, entry.Group)
+	}
+	for _, entry := range catalogValidatorRegistry {
 		fmt.Fprintf(&b, "  %-16s [%s]\n", entry.Label, entry.Group)
 	}
 	return b.String()
@@ -174,17 +213,29 @@ func ValidateProduct(p Product, validators ...Validator) []string {
 }
 
 // Validate runs catalog validators across the catalog's products and returns
-// the combined list of reasons. If no validators are provided, uses
-// DefaultCatalogValidators().
-func (c *Catalog) Validate(validators ...CatalogValidator) []string {
+// per-package reasons. If no validators are provided, uses
+// DefaultCatalogValidators(). When strict is true, products that trigger
+// catalog warnings (e.g. duplicated package names) are removed from c.Data.
+func (c *Catalog) Validate(strict bool, validators ...CatalogValidator) CatalogRejections {
 	if len(validators) == 0 {
 		validators = DefaultCatalogValidators()
 	}
-	var reasons []string
+	rejections := make(CatalogRejections)
 	for _, v := range validators {
-		reasons = append(reasons, v(c.Data)...)
+		for pkg, r := range v(c.Data) {
+			rejections[pkg] = append(rejections[pkg], r...)
+		}
 	}
-	return reasons
+	if strict && len(rejections) > 0 {
+		var filtered []Product
+		for _, p := range c.Data {
+			if _, rejected := rejections[p.Package]; !rejected {
+				filtered = append(filtered, p)
+			}
+		}
+		c.Data = filtered
+	}
+	return rejections
 }
 
 // ValidateDatesStatic checks that dates resolve to static values using the
@@ -506,20 +557,20 @@ func ValidateOCPFormat(p Product) []string {
 
 // ValidateNoDuplicates checks that no package name appears in multiple products.
 // REQ-VAL-01
-func ValidateNoDuplicates(products []Product) []string {
+func ValidateNoDuplicates(products []Product) CatalogRejections {
 	pkgCount := make(map[string]int)
 	for _, p := range products {
 		if p.Package != "" {
 			pkgCount[p.Package]++
 		}
 	}
-	var reasons []string
+	rejections := make(CatalogRejections)
 	for pkg, count := range pkgCount {
 		if count > 1 {
-			reasons = append(reasons, fmt.Sprintf("REQ-VAL-01: package %q appears in %d products", pkg, count))
+			rejections[pkg] = []string{fmt.Sprintf("REQ-VAL-01: package %q appears in %d products", pkg, count)}
 		}
 	}
-	return reasons
+	return rejections
 }
 
 // ValidateIsOperator checks that the product has a package name and is flagged as an operator.
