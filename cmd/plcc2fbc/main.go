@@ -53,6 +53,7 @@ func run() (err error) {
 	var strict bool
 	var validatorsFlag string
 	var listValidators bool
+	var split bool
 
 	flag.StringVarP(&format, "output", "o", "json", "output format: json, json-pretty, or yaml")
 	flag.StringVarP(&logPath, "log", "l", "", "write operational logs to a file; parent directory must exist (default: stdout)")
@@ -62,8 +63,9 @@ func run() (err error) {
 	flag.BoolVar(&strict, "strict", false, "treat PLCC validation warnings as errors and filter out failing packages")
 	flag.StringVar(&validatorsFlag, "validators", "all", "comma-separated list of validators to run (labels, groups: all, syntax, semantic, catalog)")
 	flag.BoolVar(&listValidators, "list-validators", false, "list available validators and exit")
+	flag.BoolVar(&split, "split", false, "write each package to <dir>/<package>/lifecycle.{json,yaml}; positional arg is a directory")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <output-file>\n\nThe parent directory of <output-file> must already exist.\n\nFlags:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <output-file|output-dir>\n\nThe parent directory of <output-file> must already exist.\nWith --split, <output-dir> must already exist.\n\nFlags:\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -87,13 +89,23 @@ func run() (err error) {
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(logWriter, nil)))
 
+	if dumpPLCC && split {
+		return fmt.Errorf("--dump-plcc and --split are mutually exclusive")
+	}
+
 	if flag.NArg() != 1 {
 		flag.Usage()
 		return fmt.Errorf("missing output file")
 	}
 	writePath := flag.Arg(0)
-	if err := validateOutputPath(writePath); err != nil {
-		return fmt.Errorf("invalid output path: %w", err)
+	if split {
+		if err := validateSplitOutputDir(writePath); err != nil {
+			return fmt.Errorf("invalid output directory: %w", err)
+		}
+	} else {
+		if err := validateOutputPath(writePath); err != nil {
+			return fmt.Errorf("invalid output path: %w", err)
+		}
 	}
 
 	writer, err := fbc.NewPackageWriter(format)
@@ -193,6 +205,46 @@ func run() (err error) {
 		return nil
 	}
 
+	if split {
+		valid, failures := fbc.Translate(catalog.Data, fbc.DefaultFilters()...)
+		if err := report.LogResults(os.Stderr, failures...); err != nil {
+			return err
+		}
+		if len(valid) == 0 {
+			slog.Warn("no FBC data generated")
+			return errPackageNotFound
+		}
+
+		ext := "json"
+		if format == "yaml" {
+			ext = "yaml"
+		}
+		filename := "lifecycle." + ext
+
+		for _, pkg := range valid {
+			pkgDir := filepath.Join(writePath, pkg.Name)
+			if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+				return fmt.Errorf("creating package directory %s: %w", pkgDir, err)
+			}
+			outPath := filepath.Join(pkgDir, filename)
+			f, err := os.Create(outPath)
+			if err != nil {
+				return fmt.Errorf("creating output file %s: %w", outPath, err)
+			}
+			werr := writer.Write(f, pkg)
+			cerr := f.Close()
+			if werr != nil {
+				return fmt.Errorf("writing package %s: %w", pkg.Name, werr)
+			}
+			if cerr != nil {
+				return fmt.Errorf("closing %s: %w", outPath, cerr)
+			}
+		}
+
+		slog.Info("wrote split FBC data", "count", len(valid), "dir", writePath, "format", format)
+		return nil
+	}
+
 	f, err := os.Create(writePath)
 	if err != nil {
 		slog.Error("failed to create output file", "path", writePath, "error", err)
@@ -228,6 +280,20 @@ func validateOutputPath(path string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("parent path %q is not a directory", dir)
+	}
+	return nil
+}
+
+func validateSplitOutputDir(path string) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("directory %q does not exist", path)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot access %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path %q is not a directory", path)
 	}
 	return nil
 }

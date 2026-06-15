@@ -70,6 +70,30 @@ func TestRun(t *testing.T) {
 			args:    []string{"plcc2fbc", "-i", testdataInput, "-l", "/nonexistent-dir/run.log", "/dev/null"},
 			wantErr: "parent directory",
 		},
+		{
+			name:    "dump-plcc and split are mutually exclusive",
+			args:    []string{"plcc2fbc", "-i", testdataInput, "--dump-plcc", "--split", t.TempDir()},
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "split directory does not exist",
+			args:    []string{"plcc2fbc", "-i", testdataInput, "--split", "/nonexistent-dir-split"},
+			wantErr: "does not exist",
+		},
+		{
+			name: "split path is not a directory",
+			args: func() []string {
+				f := filepath.Join(t.TempDir(), "afile")
+				_ = os.WriteFile(f, nil, 0o644)
+				return []string{"plcc2fbc", "-i", testdataInput, "--split", f}
+			}(),
+			wantErr: "not a directory",
+		},
+		{
+			name:         "split no matching packages",
+			args:         []string{"plcc2fbc", "-i", testdataInput, "-p", "nonexistent-package", "--split", t.TempDir()},
+			wantNotFound: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -97,9 +121,10 @@ func TestRun(t *testing.T) {
 
 func TestRunSuccess(t *testing.T) {
 	tests := []struct {
-		name   string
-		args   func(outFile string) []string
-		checks func(t *testing.T, outFile string)
+		name          string
+		args          func(outFile string) []string
+		checks        func(t *testing.T, outFile string)
+		skipFileCheck bool
 	}{
 		{
 			name: "json",
@@ -161,6 +186,78 @@ func TestRunSuccess(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "split json",
+			args: func(out string) []string {
+				return []string{"plcc2fbc", "-i", testdataInput, "--split", filepath.Dir(out)}
+			},
+			skipFileCheck: true,
+			checks: func(t *testing.T, outFile string) {
+				dir := filepath.Dir(outFile)
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatalf("reading output dir: %v", err)
+				}
+				if len(entries) == 0 {
+					t.Fatal("no package directories created")
+				}
+				for _, entry := range entries {
+					if !entry.IsDir() {
+						continue
+					}
+					lf := filepath.Join(dir, entry.Name(), "lifecycle.json")
+					info, err := os.Stat(lf)
+					if err != nil {
+						t.Errorf("lifecycle.json not found in %s: %v", entry.Name(), err)
+						continue
+					}
+					if info.Size() == 0 {
+						t.Errorf("lifecycle.json is empty in %s", entry.Name())
+					}
+				}
+			},
+		},
+		{
+			name: "split yaml",
+			args: func(out string) []string {
+				return []string{"plcc2fbc", "-i", testdataInput, "-o", "yaml", "--split", filepath.Dir(out)}
+			},
+			skipFileCheck: true,
+			checks: func(t *testing.T, outFile string) {
+				dir := filepath.Dir(outFile)
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatalf("reading output dir: %v", err)
+				}
+				if len(entries) == 0 {
+					t.Fatal("no package directories created")
+				}
+				lf := filepath.Join(dir, entries[0].Name(), "lifecycle.yaml")
+				if _, err := os.Stat(lf); err != nil {
+					t.Errorf("lifecycle.yaml not found: %v", err)
+				}
+			},
+		},
+		{
+			name: "split with package filter",
+			args: func(out string) []string {
+				return []string{"plcc2fbc", "-i", testdataInput, "-p", "rhacs-operator", "--split", filepath.Dir(out)}
+			},
+			skipFileCheck: true,
+			checks: func(t *testing.T, outFile string) {
+				dir := filepath.Dir(outFile)
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatalf("reading output dir: %v", err)
+				}
+				if len(entries) != 1 {
+					t.Fatalf("expected 1 package directory, got %d", len(entries))
+				}
+				if entries[0].Name() != "rhacs-operator" {
+					t.Errorf("expected directory 'rhacs-operator', got %q", entries[0].Name())
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -172,12 +269,14 @@ func TestRunSuccess(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			info, err := os.Stat(outFile)
-			if err != nil {
-				t.Fatalf("output file not created: %v", err)
-			}
-			if info.Size() == 0 {
-				t.Error("output file is empty")
+			if !tt.skipFileCheck {
+				info, err := os.Stat(outFile)
+				if err != nil {
+					t.Fatalf("output file not created: %v", err)
+				}
+				if info.Size() == 0 {
+					t.Error("output file is empty")
+				}
 			}
 
 			if tt.checks != nil {
@@ -222,6 +321,53 @@ func TestValidateOutputPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateOutputPath(tt.path)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if got := err.Error(); !strings.Contains(got, tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", got, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateSplitOutputDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr string
+	}{
+		{
+			name: "valid existing directory",
+			path: t.TempDir(),
+		},
+		{
+			name:    "directory does not exist",
+			path:    "/nonexistent-dir-split-test",
+			wantErr: "does not exist",
+		},
+		{
+			name: "path is a file not a directory",
+			path: func() string {
+				f := filepath.Join(t.TempDir(), "afile")
+				if err := os.WriteFile(f, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return f
+			}(),
+			wantErr: "not a directory",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSplitOutputDir(tt.path)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
