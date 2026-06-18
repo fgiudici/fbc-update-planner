@@ -1,6 +1,6 @@
 GOFLAGS := -trimpath
 DATE       := $(shell date +%y%m%d)
-DEST_IMAGE ?= quay.io/updateplanner/catalog:latest
+DEST_IMAGE ?= quay.io/updateplanner/catalog:$(DATE)
 
 .PHONY: build
 build: plcc2fbc

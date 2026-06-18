@@ -77,8 +77,10 @@ extract_catalog() {
 
     local cid
     cid=$("${CONTAINER_TOOL}" create "${CATALOG_BASE_IMAGE}" /bin/true)
+    trap "${CONTAINER_TOOL} rm ${cid} >/dev/null 2>&1" EXIT
     "${CONTAINER_TOOL}" cp "${cid}:/configs" "${CONFIGS_DIR}"
     "${CONTAINER_TOOL}" rm "${cid}" >/dev/null
+    trap - EXIT
     info "Extracted $(ls -1 "${CONFIGS_DIR}" | wc -l) operator directories"
 }
 
@@ -151,7 +153,7 @@ diagnose() {
         echo "--- Dropped packages (review ${BUILDDIR}/validation.log for reasons) ---"
         while IFS= read -r pkg; do
             local reasons
-            reasons=$(grep "\"package\":\"${pkg}\"" "${BUILDDIR}/validation.log" 2>/dev/null | head -1 || echo "  (no validation entry found)")
+            reasons=$(grep -F "\"package\":\"${pkg}\"" "${BUILDDIR}/validation.log" 2>/dev/null | head -1 || echo "  (no validation entry found)")
             echo "  ${pkg}:"
             echo "    ${reasons}"
         done < "${BUILDDIR}/dropped-packages.txt"
@@ -170,16 +172,20 @@ diagnose() {
 generate_lifecycle_files() {
     info "Generating per-operator lifecycle.json files..."
     rm -rf "${LIFECYCLE_DIR}"
-    local count=0
+    local count=0 failures=0
     while IFS= read -r pkg; do
         if [[ -d "${CONFIGS_DIR}/${pkg}" ]]; then
             mkdir -p "${LIFECYCLE_DIR}/${pkg}"
-            bin/plcc2fbc -i "${PLCC_CACHE}" -p "${pkg}" -o json-pretty \
-                "${LIFECYCLE_DIR}/${pkg}/lifecycle.json" 2>/dev/null
-            count=$((count + 1))
+            if bin/plcc2fbc -i "${PLCC_CACHE}" -p "${pkg}" -o json-pretty \
+                "${LIFECYCLE_DIR}/${pkg}/lifecycle.json" 2>/dev/null; then
+                count=$((count + 1))
+            else
+                failures=$((failures + 1))
+                warn "Failed to generate lifecycle.json for ${pkg}"
+            fi
         fi
     done < "${BUILDDIR}/produced-packages.txt"
-    info "Generated lifecycle.json for ${count} operators"
+    info "Generated lifecycle.json for ${count} operators (${failures} failures)"
 }
 
 build_image() {
@@ -188,7 +194,7 @@ build_image() {
     info "Building augmented catalog image..."
     "${CONTAINER_TOOL}" build -t "${DEST_IMAGE}" \
         --build-arg "CATALOG_IMAGE=${CATALOG_BASE_IMAGE}" \
-        -f scripts/Dockerfile "${CATALOG_DIR}"
+        -f scripts/Dockerfile.catalog "${CATALOG_DIR}"
     info "Image built: ${DEST_IMAGE}"
 }
 
@@ -208,7 +214,7 @@ fi
 validate_prerequisites
 fetch_plcc_data
 extract_catalog
-diagnose
+diagnose || error "Diagnosis failed — no valid FBC data to build from"
 generate_lifecycle_files
 build_image
 # push_image
