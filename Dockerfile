@@ -1,8 +1,11 @@
 # Keep default in sync with the VERSION file; override with --build-arg VERSION=x.y.z
 ARG VERSION=0.1.0
+# COMMIT is injected by the CI pipeline (Tekton/Konflux); empty when building locally without .git
+ARG COMMIT=""
 
 FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1784751462 AS builder
 
+ARG COMMIT
 WORKDIR /opt/app-root/src
 ENV CGO_ENABLED=0
 
@@ -11,7 +14,7 @@ COPY --chown=1001:0 . .
 
 # Konflux will automatically inject `. /cachi2/cachi2.env &&` before this RUN 
 # to point the Go toolchain to the offline dependency cache it prefetched.
-RUN LDFLAGS="-s -w" make build
+RUN LDFLAGS="-s -w" make COMMIT="${COMMIT}" build
 
 ## Final image
 
