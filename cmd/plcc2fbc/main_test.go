@@ -195,6 +195,39 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestVersionDockerfileDrift(t *testing.T) {
+	// Read the VERSION file (single source of truth for the release version).
+	versionData, err := os.ReadFile(filepath.Join("..", "..", "VERSION"))
+	if err != nil {
+		t.Fatalf("reading VERSION file: %v", err)
+	}
+	versionFileValue := strings.TrimSpace(string(versionData))
+
+	// Read the Dockerfile and find the ARG VERSION= default.
+	dockerfileData, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("reading Dockerfile: %v", err)
+	}
+
+	var dockerfileVersion string
+	for _, line := range strings.Split(string(dockerfileData), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "ARG VERSION=") {
+			dockerfileVersion = strings.TrimPrefix(trimmed, "ARG VERSION=")
+			break
+		}
+	}
+
+	if dockerfileVersion == "" {
+		t.Fatal("no ARG VERSION= line found in Dockerfile")
+	}
+
+	if versionFileValue != dockerfileVersion {
+		t.Errorf("VERSION file (%q) and Dockerfile ARG VERSION default (%q) are out of sync",
+			versionFileValue, dockerfileVersion)
+	}
+}
+
 func TestRunSuccess(t *testing.T) {
 	tests := []struct {
 		name          string
