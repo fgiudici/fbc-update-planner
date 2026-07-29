@@ -15,6 +15,7 @@
 
 ```
 cmd/plcc2fbc/main.go          CLI entry point — flag parsing, orchestration
+cmd/plcc2fbc/version.go       Version/commit variables injected via ldflags
 cmd/plcc2fbc/main_test.go     Tests for CLI (run function)
 pkg/plcc/plcc.go              PLCC API client, data types, filtering, sorting
 pkg/plcc/validation.go        PLCC validator registry — per-product and catalog-level checks
@@ -38,10 +39,13 @@ test/e2e/testdata/            E2e test fixtures (plcc.json, reference YAMLs, unt
 docs/VALIDATION_RULES.md      Filter pipeline spec (read before touching filters)
 docs/FBC_SCHEMA.md            FBC output schema reference
 docs/E2E_TESTS.md             E2e test architecture, test matrix, golden file workflow
+docs/RELEASING.md             Release process and version injection reference
 schema-examples/              Example PLCC + FBC schemas for reference
 scripts/plcc-check.sh         Batch runner — runs plcc2fbc against a list of operators, summarizes results
 scripts/top-operators         Default operator list for plcc-check.sh
-.github/workflows/tests.yaml  CI workflow definition
+.goreleaser.yaml              GoReleaser config for cross-platform binary builds
+.github/workflows/tests.yaml  CI workflow — runs tests + lint on PRs to main
+.github/workflows/release.yaml  Release workflow — runs GoReleaser on v* tag push
 ```
 
 ## Commands
@@ -56,6 +60,8 @@ make generate-fbc       # build + run against live PLCC API, write YAML + logs t
 ```
 
 No separate lint command — CI runs `golangci-lint` with defaults (no `.golangci.yaml`).
+
+**Releasing:** Tag-triggered — push a `v*` tag to run GoReleaser via `.github/workflows/release.yaml`. See `docs/RELEASING.md` for the full workflow.
 
 ### CLI Flags
 
