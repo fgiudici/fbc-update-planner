@@ -31,25 +31,39 @@ Arguments:
 Options:
   -o <dir>           Output directory for generated files (default: current directory)
   --plcc             Validate PLCC data only (skip FBC generation)
-  --fbc              Convert to FBC only (skip PLCC validation)
+  --validators <v>   Comma-separated validators to run (passed through to plcc2fbc;
+                     use "none" to skip PLCC validation entirely)
   -h                 Show this help
 
 Example usage:
 ./plcc-check.sh -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --plcc -o \$(date +%y%m%d) top-operators > summary.txt
-./plcc-check.sh --fbc -o \$(date +%y%m%d) top-operators > summary.txt
+./plcc-check.sh --validators none -o \$(date +%y%m%d) top-operators > summary.txt
+./plcc-check.sh --validators syntax -o \$(date +%y%m%d) top-operators > summary.txt
 EOF
 }
 
 outdir="."
 validate_only=false
-convert_only=false
+validators=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -o) outdir="$2"; shift 2 ;;
+        -o)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: -o requires a value" >&2
+                usage >&2
+                exit 1
+            fi
+            outdir="$2"; shift 2 ;;
         --plcc) validate_only=true; shift ;;
-        --fbc) convert_only=true; shift ;;
+        --validators)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --validators requires a value" >&2
+                usage >&2
+                exit 1
+            fi
+            validators="$2"; shift 2 ;;
         -h) usage; exit 0 ;;
         -*) usage >&2; exit 1 ;;
         *) break ;;
@@ -103,12 +117,12 @@ log_out="$tmpdir/slog.json"
 val_out="$tmpdir/validation.jsonl"
 
 plcc2fbc_args=(--allow-missing -o yaml -l "$val_out" -p "$pkg_list")
+if [[ -n "$validators" ]]; then
+    plcc2fbc_args+=(--validators "$validators")
+fi
 if $validate_only; then
     plcc2fbc_args+=(--dump-plcc)
     echo "Running plcc2fbc with ${#operators[@]} operators (PLCC validation only)..."
-elif $convert_only; then
-    plcc2fbc_args+=(--validators "")
-    echo "Running plcc2fbc with ${#operators[@]} operators (FBC filtering only)..."
 else
     echo "Running plcc2fbc with ${#operators[@]} operators..."
 fi
