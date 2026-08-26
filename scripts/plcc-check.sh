@@ -20,13 +20,16 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [options] <operators-file>
+Usage: $(basename "$0") [options] [operators-file]
 
-Run plcc2fbc against a list of operators and summarize results.
+Run plcc2fbc against a list of operators and summarize results. If
+<operators-file> is omitted, all packages found in the PLCC data are
+processed.
 
 Arguments:
-  <operators-file>   File with one operator name per line (blank lines and
-                     lines starting with # are ignored)
+  [operators-file]   File with one operator name per line (blank lines and
+                     lines starting with # are ignored). If omitted, every
+                     package present in the PLCC data is checked.
 
 Options:
   -o <dir>           Output directory for generated files (default: current directory)
@@ -37,6 +40,7 @@ Options:
 
 Example usage:
 ./plcc-check.sh -o \$(date +%y%m%d) top-operators > summary.txt
+./plcc-check.sh -o \$(date +%y%m%d) > summary.txt
 ./plcc-check.sh --plcc -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --validators none -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --validators syntax -o \$(date +%y%m%d) top-operators > summary.txt
@@ -70,17 +74,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ $# -ne 1 ]]; then
+if [[ $# -eq 0 ]]; then
+    operators_file=""
+elif [[ $# -eq 1 ]]; then
+    operators_file="$1"
+else
     usage >&2
     exit 1
 fi
 
-operators_file="$1"
-
-if [[ ! -f "$operators_file" ]]; then
-    echo "Error: operators file not found: $operators_file" >&2
-    exit 1
-fi
 
 if ! command -v jq &>/dev/null; then
     echo "Error: jq is required but not found in PATH" >&2
@@ -88,23 +90,6 @@ if ! command -v jq &>/dev/null; then
 fi
 
 mkdir -p "$outdir"
-
-# Read operator names, skipping blank lines and comments.
-operators=()
-while IFS= read -r line; do
-    line="${line%%#*}"
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line%"${line##*[![:space:]]}"}"
-    [[ -z "$line" ]] && continue
-    operators+=("$line")
-done < "$operators_file"
-
-if [[ ${#operators[@]} -eq 0 ]]; then
-    echo "Error: no operator names found in $operators_file" >&2
-    exit 1
-fi
-
-pkg_list="$(IFS=,; echo "${operators[*]}")"
 
 echo "Building plcc2fbc..."
 make -C "$ROOT_DIR" build --quiet
@@ -116,15 +101,38 @@ fbc_out="$tmpdir/fbc.yaml"
 log_out="$tmpdir/slog.json"
 val_out="$tmpdir/validation.jsonl"
 
-plcc2fbc_args=(--allow-missing -o yaml -l "$val_out" -p "$pkg_list")
+plcc2fbc_args=(-o yaml -l "$val_out")
+
+operators_number="all"
+# Read operator names, skipping blank lines and comments.
+if [ -n "$operators_file" ]; then
+    operators=()
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        operators+=("$line")
+    done < "$operators_file"
+
+    if [[ ${#operators[@]} -eq 0 ]]; then
+        echo "Error: no operator names found in $operators_file" >&2
+        exit 1
+    fi
+    operators_number=${#operators[@]}
+
+    pkg_list="$(IFS=,; echo "${operators[*]}")"
+    plcc2fbc_args+=(--allow-missing -p "$pkg_list")
+fi
+
 if [[ -n "$validators" ]]; then
     plcc2fbc_args+=(--validators "$validators")
 fi
 if $validate_only; then
     plcc2fbc_args+=(--dump-plcc)
-    echo "Running plcc2fbc with ${#operators[@]} operators (PLCC validation only)..."
+    echo "Running plcc2fbc with ${operators_number} operators (PLCC validation only)..."
 else
-    echo "Running plcc2fbc with ${#operators[@]} operators..."
+    echo "Running plcc2fbc with ${operators_number} operators..."
 fi
 set +e
 "$ROOT_DIR/bin/plcc2fbc" "${plcc2fbc_args[@]}" "$fbc_out" >"$log_out" 2>"$tmpdir/stderr.log"
@@ -148,13 +156,44 @@ while IFS= read -r name; do
 done < <(jq -r 'select(.level == "WARN" and .msg == "requested package not found in PLCC data") | .package' "$log_out" 2>/dev/null)
 
 # Operators with validation issues: stderr JSONL entries with valid=false.
-issues_json="$(jq -s '[.[] | select((.reasons | length) > 0)]' "$val_out" 2>/dev/null || echo '[]')"
+# packageName may be a comma-separated list when a product fails PLCC
+# validation before its packages are expanded into separate entries; split
+# those into one entry per package so counts and detail output line up with
+# individual operator names.
+issues_json="$(jq -s '
+    [.[] | select((.reasons | length) > 0)]
+    | [.[] | . as $item
+        | ($item.packageName | split(",") | map(gsub("^\\s+|\\s+$"; "")))[]
+        | $item + {packageName: .}]
+' "$val_out" 2>/dev/null || echo '[]')"
 
 # Build a set of package names that have issues.
 issue_names=()
 while IFS= read -r name; do
     [[ -n "$name" ]] && issue_names+=("$name")
 done < <(echo "$issues_json" | jq -r '.[].packageName' | sort -u)
+
+# In "all packages" mode we don't know package names ahead of time, so
+# derive the operator list from the run's own output: packages present in
+# the generated FBC (or PLCC dump) passed, packages present in the
+# validation log with issues did not. Missing packages can't be detected in
+# this mode since no -p flag is passed to plcc2fbc.
+if [[ -z "$operators_file" ]]; then
+    operators=()
+    if $validate_only; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && operators+=("$name")
+        done < <(jq -r '.data[]?.package // empty' "$fbc_out" 2>/dev/null | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    else
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && operators+=("$name")
+        done < <(grep '^package:' "$fbc_out" 2>/dev/null | sed -e 's/^package:[[:space:]]*//' -e 's/^"//' -e 's/"$//')
+    fi
+    operators+=("${issue_names[@]}")
+    if [[ ${#operators[@]} -gt 0 ]]; then
+        readarray -t operators < <(printf '%s\n' "${operators[@]}" | sort -u)
+    fi
+fi
 
 # Compute max operator name length for aligned output.
 max_len=0
