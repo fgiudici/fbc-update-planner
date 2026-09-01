@@ -88,20 +88,21 @@ parse_args() {
 }
 
 log_info() {
-    echo -e "$@" | tee -a $FILE_SUM
+    echo -e "$@" | tee -a "$FILE_SUM"
 }
 
 log_error() {
-    echo -e "$@" >&2
+    echo -e "Error: $@" >&2
 }
 
 check_dependencies() {
     if ! command -v jq &>/dev/null; then
-        log_error "Error: jq is required but not found in PATH"
+        log_error "jq is required but not found in PATH"
         exit 1
     fi
     if ! command -v tee &>/dev/null; then
-        log_error "Error: tee is required but not found in PATH"
+        log_error "tee is required but not found in PATH"
+        exit 1
     fi
 }
 
@@ -114,6 +115,10 @@ build_plcc2fbc() {
 # comments. Sets "operators_number" and appends the comma-separated package
 # list to plcc2fbc_args via the "pkg_list" global.
 read_operators_file() {
+    if [ ! -f $OPERATORSFILE ]; then
+        log_error "file not found: $OPERATORSFILE"
+        exit 1
+    fi
     operators=()
     while IFS= read -r line; do
         line="${line%%#*}"
@@ -124,7 +129,7 @@ read_operators_file() {
     done < "$OPERATORSFILE"
 
     if [[ ${#operators[@]} -eq 0 ]]; then
-        log_error "Error: no operator names found in $OPERATORSFILE"
+        log_error "no operator names found in $OPERATORSFILE"
         exit 1
     fi
     operators_number=${#operators[@]}
@@ -158,11 +163,14 @@ run_plcc2fbc() {
     set -e
 
     if [[ "$exit_code" -eq 1 ]]; then
-        log_error "Error: plcc2fbc failed with a fatal error"
+        log_error "plcc2fbc failed with a fatal error"
         if [[ -s "$TMPDIR/stderr.log" ]]; then
             cat "$TMPDIR/stderr.log" >&2
         fi
         exit 1
+    fi
+    if [[ "$exit_code" -ne 0 ]]; then
+        log_info "Warning: plcc2fbc exited with exit code $exit_code"
     fi
 }
 
@@ -270,32 +278,55 @@ print_issues_detail() {
     fi
 }
 
+print_csv_lists() {
+    local name is_missing has_issues m
+    for name in "${operators[@]}"; do
+        is_missing=false
+        for m in "${RESULTS_MISSING[@]}"; do
+            [[ "$m" == "$name" ]] && is_missing=true && break
+        done
+        has_issues=false
+        for m in "${RESULTS_OPWITHISSUES[@]}"; do
+            [[ "$m" == "$name" ]] && has_issues=true && break
+        done
+        if ! $is_missing && ! $has_issues; then
+            RESULTS_PASSED+=("$name")
+        fi
+    done
+
+    log_info ""
+    log_info "\n=== CSV operator lists ==="
+    log_info "- Missing: $(IFS=,; echo "${RESULTS_MISSING[*]:-}")"
+    log_info "- With issues: $(IFS=,; echo "${RESULTS_OPWITHISSUES[*]:-}")"
+    log_info "- Passed: $(IFS=,; echo "${RESULTS_PASSED[*]:-}")"
+}
+
 copy_output_files() {
-    local out_dat msg_dat
-    local out_val="$OUTDIR/validation.jsonl"    msg_val="Validation results"
-    local out_log="$OUTDIR/slog.json"           msg_log="Operational log"
-    local out_sum="$OUTDIR/summary.txt"         msg_sum="Summary"
-    local txt
+    local out_FBC msg_FBC
+    local out_VAL="$OUTDIR/validation.jsonl"    msg_VAL="Validation results"
+    local out_LOG="$OUTDIR/slog.json"           msg_LOG="Operational log"
+    local out_SUM="$OUTDIR/summary.txt"         msg_SUM="Summary"
+    local suffix
 
     if $VALIDATEONLY; then
-        out_dat="$OUTDIR/plcc-dump.json"
-        msg_dat="Filtered PLCC data"
+        out_FBC="$OUTDIR/plcc-dump.json"
+        msg_FBC="Filtered PLCC data"
     else
-        out_dat="$OUTDIR/fbc-output.yaml"
-        msg_dat="FBC blobs"
+        out_FBC="$OUTDIR/fbc-output.yaml"
+        msg_FBC="FBC blobs"
     fi
-    if [[ ! -f "$FILE_FBC" ]]; then
-        log_error "no output file produced (exit code $exit_code)"
-    fi
-    cp -f "$FILE_FBC" "$out_dat"
-    cp -f "$FILE_VAL" "$OUTDIR/validation.jsonl"
-    cp -f "$FILE_LOG" "$OUTDIR/slog.json"
-    cp -f "$FILE_SUM" "$OUTDIR/summary.txt"
 
-    log_info "Generated files:"
-    for txt in sum dat val log; do
-        local -n out_ref="out_$txt"
-        local -n msg_ref="msg_$txt"
+    log_info "\n === Generated files ==="
+    for suffix in FBC VAL LOG SUM; do
+        local -n file_ref="FILE_$suffix"
+        local -n out_ref="out_$suffix"
+        local -n msg_ref="msg_$suffix"
+        if [[ ! -f "$file_ref" ]]; then
+            log_error "file $file_ref not found"
+        else
+            cp -f "$file_ref" "$out_ref"
+        fi
+
         log_info "$(printf "  %-24s %s" "$out_ref" "$msg_ref")"
     done
 }
@@ -318,6 +349,7 @@ main() {
 
     RESULTS_MISSING=()
     RESULTS_OPWITHISSUES=()
+    RESULTS_PASSED=()
     RESULTS_ISSUES=""
     parse_results
     derive_operators_from_output
@@ -325,6 +357,7 @@ main() {
     print_operator_list
     print_summary
     print_issues_detail
+    print_csv_lists
 
     copy_output_files
 }
