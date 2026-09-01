@@ -35,7 +35,8 @@ pkg/fbc/pipeline_test.go      Integration test — full pipeline vs reference ou
 pkg/fbc/testdata/             Test fixtures (plcc.json, reference-fbc.yaml, etc.)
 pkg/report/result.go          Shared ValidationResult type + JSON-lines log writer
 test/e2e/e2e_test.go          End-to-end tests — build binary, run against fixture, compare output
-test/e2e/testdata/            E2e test fixtures (plcc.json, reference YAMLs, untranslatable.json)
+test/e2e/plcc_check_test.go   End-to-end tests for scripts/plcc-check.sh against fixture, compare output
+test/e2e/testdata/            E2e test fixtures (plcc.json, reference YAMLs, untranslatable.json, plcc-check/)
 docs/VALIDATION_RULES.md      Filter pipeline spec (read before touching filters)
 docs/FBC_SCHEMA.md            FBC output schema reference
 docs/E2E_TESTS.md             E2e test architecture, test matrix, golden file workflow

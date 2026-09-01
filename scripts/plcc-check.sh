@@ -37,6 +37,8 @@ Arguments:
 
 Options:
   -o <dir>           Output directory for generated files (default: current directory)
+  -i <file>          Read PLCC JSON from a file instead of fetching from the API
+                     (passed through to plcc2fbc; mainly useful for testing)
   --plcc             Validate PLCC data only (skip FBC generation)
   --validators <v>   Comma-separated validators to run (passed through to plcc2fbc;
                      use "none" to skip PLCC validation entirely)
@@ -53,6 +55,7 @@ EOF
 
 # Globals populated by parse_args() and consumed throughout the script.
 g_outdir="."
+g_input_file=""
 g_validate_only=false
 g_plcc_validators=""
 g_operators_file=""
@@ -67,6 +70,13 @@ parse_args() {
                     exit 1
                 fi
                 g_outdir="$2"; shift 2 ;;
+            -i)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: -i requires a value" >&2
+                    usage >&2
+                    exit 1
+                fi
+                g_input_file="$2"; shift 2 ;;
             --plcc) g_validate_only=true; shift ;;
             --validators)
                 if [[ $# -lt 2 ]]; then
@@ -146,6 +156,9 @@ read_operators_file() {
 # Builds g_plcc2fbc_args, runs the binary, and aborts on fatal errors.
 run_plcc2fbc() {
     g_plcc2fbc_args=(-o yaml -l "$FILE_VAL")
+    if [[ -n "$g_input_file" ]]; then
+        g_plcc2fbc_args+=(-i "$g_input_file")
+    fi
 
     g_operators_number="all"
     if [[ -n "$g_operators_file" ]]; then
