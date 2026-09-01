@@ -155,6 +155,8 @@ func run() (err error) {
 	}
 
 	catalog.ExpandPackages()
+	slog.Info("PLCC product expansion", "count", catalog.Len())
+
 	catalog.SortByPackage()
 
 	var count int
@@ -295,7 +297,7 @@ func loadAndValidate(inputPath, packages, validatorsFlag string, strict, allowMi
 	} else {
 		catalog.DropWithoutPackageName()
 	}
-	slog.Info("filtered packages", "count", catalog.Len())
+	slog.Info("filtered products", "count", catalog.Len())
 	catalog.SortByPackage()
 
 	if len(catalogValidators) > 0 {
@@ -333,7 +335,7 @@ func loadAndValidate(inputPath, packages, validatorsFlag string, strict, allowMi
 		}
 	}
 	if strict {
-		slog.Info("PLCC package validation", "passed", len(filtered), "filtered", len(catalog.Data)-len(filtered))
+		slog.Info("PLCC product validation", "passed", len(filtered), "filtered", len(catalog.Data)-len(filtered))
 		catalog.Data = filtered
 	}
 
