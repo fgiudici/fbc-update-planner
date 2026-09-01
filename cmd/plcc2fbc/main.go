@@ -259,8 +259,8 @@ func loadAndValidate(inputPath, packages, validatorsFlag string, strict, allowMi
 		return nil, fmt.Errorf("loading PLCC data: %w", err)
 	}
 
-	slog.Info("fetched products from PLCC", "count", catalog.Len())
-
+	// Watch out: validators can have init functions which require parsing an already loaded
+	// catalog, so never collect validators before loading the catalog!
 	var validatorNames []string
 	for _, name := range strings.Split(validatorsFlag, ",") {
 		name = strings.TrimSpace(name)
@@ -274,6 +274,7 @@ func loadAndValidate(inputPath, packages, validatorsFlag string, strict, allowMi
 	}
 	slog.Info("resolved validators", "product", len(validators), "catalog", len(catalogValidators))
 
+	slog.Info("fetched products from PLCC", "count", catalog.Len())
 	if packages != "" {
 		var names []string
 		for _, name := range strings.Split(packages, ",") {
