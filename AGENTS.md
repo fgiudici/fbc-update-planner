@@ -41,8 +41,10 @@ docs/FBC_SCHEMA.md            FBC output schema reference
 docs/E2E_TESTS.md             E2e test architecture, test matrix, golden file workflow
 docs/RELEASING.md             Release process and version injection reference
 schema-examples/              Example PLCC + FBC schemas for reference
-scripts/plcc-check.sh         Batch runner — runs plcc2fbc against a list of operators, summarizes results
-scripts/top-operators         Default operator list for plcc-check.sh
+scripts/plcc-check.sh         Batch runner — runs plcc2fbc against an operator list (or the full PLCC dataset if
+                               none given) and writes summary.txt, validation.jsonl, slog.json, and the FBC/PLCC
+                               dump to an output directory
+scripts/top-operators         Example operator list for plcc-check.sh
 .goreleaser.yaml              GoReleaser config for cross-platform binary builds
 .github/workflows/tests.yaml  CI workflow — runs tests + lint on PRs to main
 .github/workflows/release.yaml  Release workflow — runs GoReleaser on v* tag push

@@ -259,8 +259,8 @@ func loadAndValidate(inputPath, packages, validatorsFlag string, strict, allowMi
 		return nil, fmt.Errorf("loading PLCC data: %w", err)
 	}
 
-	// Watch out: validators can have init functions which require parsing an already loaded
-	// catalog, so never collect validators before loading the catalog!
+	// Validators can have init functions that require an already loaded catalog,
+	// so collect them only after the catalog is loaded.
 	var validatorNames []string
 	for _, name := range strings.Split(validatorsFlag, ",") {
 		name = strings.TrimSpace(name)
