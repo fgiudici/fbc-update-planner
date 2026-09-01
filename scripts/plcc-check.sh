@@ -47,65 +47,73 @@ Example usage:
 EOF
 }
 
-outdir="."
-validate_only=false
-validators=""
+# Globals populated by parse_args() and consumed throughout the script.
+OUTDIR="."
+VALIDATEONLY=false
+PLCCVALIDATORS=""
+OPERATORSFILE=""
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -o)
-            if [[ $# -lt 2 ]]; then
-                echo "Error: -o requires a value" >&2
-                usage >&2
-                exit 1
-            fi
-            outdir="$2"; shift 2 ;;
-        --plcc) validate_only=true; shift ;;
-        --validators)
-            if [[ $# -lt 2 ]]; then
-                echo "Error: --validators requires a value" >&2
-                usage >&2
-                exit 1
-            fi
-            validators="$2"; shift 2 ;;
-        -h) usage; exit 0 ;;
-        -*) usage >&2; exit 1 ;;
-        *) break ;;
-    esac
-done
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: -o requires a value" >&2
+                    usage >&2
+                    exit 1
+                fi
+                OUTDIR="$2"; shift 2 ;;
+            --plcc) VALIDATEONLY=true; shift ;;
+            --validators)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --validators requires a value" >&2
+                    usage >&2
+                    exit 1
+                fi
+                PLCCVALIDATORS="$2"; shift 2 ;;
+            -h) usage; exit 0 ;;
+            -*) usage >&2; exit 1 ;;
+            *) break ;;
+        esac
+    done
 
-if [[ $# -eq 0 ]]; then
-    operators_file=""
-elif [[ $# -eq 1 ]]; then
-    operators_file="$1"
-else
-    usage >&2
-    exit 1
-fi
+    if [[ $# -eq 0 ]]; then
+        OPERATORSFILE=""
+    elif [[ $# -eq 1 ]]; then
+        OPERATORSFILE="$1"
+    else
+        usage >&2
+        exit 1
+    fi
+}
 
+log_info() {
+    echo -e "$@" | tee -a $FILE_SUM
+}
 
-if ! command -v jq &>/dev/null; then
-    echo "Error: jq is required but not found in PATH" >&2
-    exit 1
-fi
+log_error() {
+    echo -e "$@" >&2
+}
 
-mkdir -p "$outdir"
+check_dependencies() {
+    if ! command -v jq &>/dev/null; then
+        log_error "Error: jq is required but not found in PATH"
+        exit 1
+    fi
+    if ! command -v tee &>/dev/null; then
+        log_error "Error: tee is required but not found in PATH"
+    fi
+}
 
-echo "Building plcc2fbc..."
-make -C "$ROOT_DIR" build --quiet
+build_plcc2fbc() {
+    log_info "Building plcc2fbc..."
+    make -C "$ROOT_DIR" build --quiet
+}
 
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-
-fbc_out="$tmpdir/fbc.yaml"
-log_out="$tmpdir/slog.json"
-val_out="$tmpdir/validation.jsonl"
-
-plcc2fbc_args=(-o yaml -l "$val_out")
-
-operators_number="all"
-# Read operator names, skipping blank lines and comments.
-if [ -n "$operators_file" ]; then
+# Reads OPERATORSFILE into the "operators" array, skipping blank lines and
+# comments. Sets "operators_number" and appends the comma-separated package
+# list to plcc2fbc_args via the "pkg_list" global.
+read_operators_file() {
     operators=()
     while IFS= read -r line; do
         line="${line%%#*}"
@@ -113,164 +121,212 @@ if [ -n "$operators_file" ]; then
         line="${line%"${line##*[![:space:]]}"}"
         [[ -z "$line" ]] && continue
         operators+=("$line")
-    done < "$operators_file"
+    done < "$OPERATORSFILE"
 
     if [[ ${#operators[@]} -eq 0 ]]; then
-        echo "Error: no operator names found in $operators_file" >&2
+        log_error "Error: no operator names found in $OPERATORSFILE"
         exit 1
     fi
     operators_number=${#operators[@]}
 
     pkg_list="$(IFS=,; echo "${operators[*]}")"
     plcc2fbc_args+=(--allow-missing -p "$pkg_list")
-fi
+}
 
-if [[ -n "$validators" ]]; then
-    plcc2fbc_args+=(--validators "$validators")
-fi
-if $validate_only; then
-    plcc2fbc_args+=(--dump-plcc)
-    echo "Running plcc2fbc with ${operators_number} operators (PLCC validation only)..."
-else
-    echo "Running plcc2fbc with ${operators_number} operators..."
-fi
-set +e
-"$ROOT_DIR/bin/plcc2fbc" "${plcc2fbc_args[@]}" "$fbc_out" >"$log_out" 2>"$tmpdir/stderr.log"
-exit_code=$?
-set -e
+# Builds plcc2fbc_args, runs the binary, and aborts on fatal errors.
+run_plcc2fbc() {
+    plcc2fbc_args=(-o yaml -l "$FILE_VAL")
 
-if [[ "$exit_code" -eq 1 ]]; then
-    echo "Error: plcc2fbc failed with a fatal error" >&2
-    if [[ -s "$tmpdir/stderr.log" ]]; then
-        cat "$tmpdir/stderr.log" >&2
+    operators_number="all"
+    if [[ -n "$OPERATORSFILE" ]]; then
+        read_operators_file
     fi
-    exit 1
-fi
 
-# --- Parse results ---
+    if [[ -n "$PLCCVALIDATORS" ]]; then
+        plcc2fbc_args+=(--validators "$PLCCVALIDATORS")
+    fi
+    if $VALIDATEONLY; then
+        plcc2fbc_args+=(--dump-plcc)
+        log_info "Running plcc2fbc with ${operators_number} operators (PLCC validation only)..."
+    else
+        log_info "Running plcc2fbc with ${operators_number} operators..."
+    fi
 
-# Missing operators: slog warnings about packages not found in PLCC data.
-missing=()
-while IFS= read -r name; do
-    [[ -n "$name" ]] && missing+=("$name")
-done < <(jq -r 'select(.level == "WARN" and .msg == "requested package not found in PLCC data") | .package' "$log_out" 2>/dev/null)
+    set +e
+    "$ROOT_DIR/bin/plcc2fbc" "${plcc2fbc_args[@]}" "$FILE_FBC" >"$FILE_LOG" 2>"$TMPDIR/stderr.log"
+    exit_code=$?
+    set -e
 
-# Operators with validation issues: stderr JSONL entries with valid=false.
-# packageName may be a comma-separated list when a product fails PLCC
-# validation before its packages are expanded into separate entries; split
-# those into one entry per package so counts and detail output line up with
-# individual operator names.
-issues_json="$(jq -s '
-    [.[] | select((.reasons | length) > 0)]
-    | [.[] | . as $item
-        | ($item.packageName | split(",") | map(gsub("^\\s+|\\s+$"; "")))[]
-        | $item + {packageName: .}]
-' "$val_out" 2>/dev/null || echo '[]')"
+    if [[ "$exit_code" -eq 1 ]]; then
+        log_error "Error: plcc2fbc failed with a fatal error"
+        if [[ -s "$TMPDIR/stderr.log" ]]; then
+            cat "$TMPDIR/stderr.log" >&2
+        fi
+        exit 1
+    fi
+}
 
-# Build a set of package names that have issues.
-issue_names=()
-while IFS= read -r name; do
-    [[ -n "$name" ]] && issue_names+=("$name")
-done < <(echo "$issues_json" | jq -r '.[].packageName' | sort -u)
+# Parses missing/failed operators out of FILE_LOG and FILE_VAL. Populates
+# "RESULTS_MISSING" (packages not found), "RESULTS_ISSUES" (validation failures,
+# packageName kept exactly as PLCC recorded it), and "RESULTS_OPWITHISSUES"
+# (sorted unique set of individual package names with issues).
+parse_results() {
+    # Missing operators: slog warnings about packages not found in PLCC data.
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && RESULTS_MISSING+=("$name")
+    done < <(jq -r 'select(.level == "WARN" and .msg == "requested package not found in PLCC data") | .package' "$FILE_LOG" 2>/dev/null)
+
+    # Operators with validation issues: stderr JSONL entries with valid=false.
+    # packageName is kept exactly as PLCC recorded it (may be a comma-separated
+    # list for products not yet expanded into separate packages).
+    RESULTS_ISSUES="$(jq -s '[.[] | select((.reasons | length) > 0)]' "$FILE_VAL" 2>/dev/null || echo '[]')"
+
+    # Build the set of individual operator names with issues, splitting any
+    # comma-separated packageName so it lines up with individual operator names.
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && RESULTS_OPWITHISSUES+=("$name")
+    done < <(echo "$RESULTS_ISSUES" | jq -r '.[].packageName' \
+        | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sort -u)
+}
 
 # In "all packages" mode we don't know package names ahead of time, so
 # derive the operator list from the run's own output: packages present in
 # the generated FBC (or PLCC dump) passed, packages present in the
 # validation log with issues did not. Missing packages can't be detected in
 # this mode since no -p flag is passed to plcc2fbc.
-if [[ -z "$operators_file" ]]; then
+derive_operators_from_output() {
+    [[ -n "$OPERATORSFILE" ]] && return
+
     operators=()
-    if $validate_only; then
+    if $VALIDATEONLY; then
         while IFS= read -r name; do
             [[ -n "$name" ]] && operators+=("$name")
-        done < <(jq -r '.data[]?.package // empty' "$fbc_out" 2>/dev/null | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        done < <(jq -r '.data[]?.package // empty' "$FILE_FBC" 2>/dev/null | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     else
         while IFS= read -r name; do
             [[ -n "$name" ]] && operators+=("$name")
-        done < <(grep '^package:' "$fbc_out" 2>/dev/null | sed -e 's/^package:[[:space:]]*//' -e 's/^"//' -e 's/"$//')
+        done < <(grep '^package:' "$FILE_FBC" 2>/dev/null | sed -e 's/^package:[[:space:]]*//' -e 's/^"//' -e 's/"$//')
     fi
-    operators+=("${issue_names[@]}")
+    operators+=("${RESULTS_OPWITHISSUES[@]}")
     if [[ ${#operators[@]} -gt 0 ]]; then
         readarray -t operators < <(printf '%s\n' "${operators[@]}" | sort -u)
     fi
-fi
+}
 
-# Compute max operator name length for aligned output.
-max_len=0
-for name in "${operators[@]}"; do
-    (( ${#name} > max_len )) && max_len=${#name}
-done
+print_operator_list() {
+    local max_len=0
+    for name in "${operators[@]}"; do
+        (( ${#name} > max_len )) && max_len=${#name}
+    done
 
-# --- Copy output files ---
-if $validate_only; then
-    if [[ -f "$fbc_out" ]]; then
-        cp -f "$fbc_out" "$outdir/plcc-dump.json"
+    log_info ""
+    log_info "=== Requested operators ==="
+    for name in "${operators[@]}"; do
+        local is_missing=false
+        if [[ ${#RESULTS_MISSING[@]} -gt 0 ]]; then
+            for m in "${RESULTS_MISSING[@]}"; do
+                [[ "$m" == "$name" ]] && is_missing=true && break
+            done
+        fi
+        local has_issues=false
+        if [[ ${#RESULTS_OPWITHISSUES[@]} -gt 0 ]]; then
+            for m in "${RESULTS_OPWITHISSUES[@]}"; do
+                [[ "$m" == "$name" ]] && has_issues=true && break
+            done
+        fi
+
+        if $is_missing; then
+            log_info "$(printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name")"
+        elif $has_issues; then
+            log_info "$(printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name")"
+        else
+            log_info "$(printf "  ✓  %s\n" "$name")"
+        fi
+    done
+}
+
+print_summary() {
+    log_info ""
+    log_info "=== Summary ==="
+    local total=${#operators[@]}
+    local missing_count=${#RESULTS_MISSING[@]}
+    local issues_count=${#RESULTS_OPWITHISSUES[@]}
+    local passed_count=$((total - missing_count - issues_count))
+    log_info "$(printf "  %-14s %d\n" "Total:" "$total")"
+    log_info "$(printf "  %-14s %d\n" "Passed:" "$passed_count")"
+    log_info "$(printf "  %-14s %d\n" "Not found:" "$missing_count")"
+    log_info "$(printf "  %-14s %d\n" "With issues:" "$issues_count")"
+}
+
+print_issues_detail() {
+    log_info ""
+    log_info "=== Validation issues detail ==="
+    local json_issues_count
+    json_issues_count="$(echo "$RESULTS_ISSUES" | jq 'length')"
+    if [[ "$json_issues_count" -eq 0 ]]; then
+        log_info "  (none)"
     else
-        echo "Warning: no PLCC dump file produced (exit code $exit_code)" >&2
+        log_info "$(echo "$RESULTS_ISSUES" | jq --indent 2 -r '.[] | "  \(.packageName):", ("    " + (.reasons // [] | .[] | "- " + .))')"
     fi
-else
-    if [[ -f "$fbc_out" ]]; then
-        cp -f "$fbc_out" "$outdir/fbc-output.yaml"
+}
+
+copy_output_files() {
+    local out_dat msg_dat
+    local out_val="$OUTDIR/validation.jsonl"    msg_val="Validation results"
+    local out_log="$OUTDIR/slog.json"           msg_log="Operational log"
+    local out_sum="$OUTDIR/summary.txt"         msg_sum="Summary"
+    local txt
+
+    if $VALIDATEONLY; then
+        out_dat="$OUTDIR/plcc-dump.json"
+        msg_dat="Filtered PLCC data"
     else
-        echo "Warning: no FBC output file produced (exit code $exit_code)" >&2
+        out_dat="$OUTDIR/fbc-output.yaml"
+        msg_dat="FBC blobs"
     fi
-fi
-cp -f "$val_out" "$outdir/validation.jsonl"
-cp -f "$log_out" "$outdir/slog.json"
-
-# --- Print summary ---
-
-echo ""
-echo "=== Requested operators ==="
-for name in "${operators[@]}"; do
-    is_missing=false
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        for m in "${missing[@]}"; do
-            [[ "$m" == "$name" ]] && is_missing=true && break
-        done
+    if [[ ! -f "$FILE_FBC" ]]; then
+        log_error "no output file produced (exit code $exit_code)"
     fi
-    has_issues=false
-    if [[ ${#issue_names[@]} -gt 0 ]]; then
-        for m in "${issue_names[@]}"; do
-            [[ "$m" == "$name" ]] && has_issues=true && break
-        done
-    fi
+    cp -f "$FILE_FBC" "$out_dat"
+    cp -f "$FILE_VAL" "$OUTDIR/validation.jsonl"
+    cp -f "$FILE_LOG" "$OUTDIR/slog.json"
+    cp -f "$FILE_SUM" "$OUTDIR/summary.txt"
 
-    if $is_missing; then
-        printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name"
-    elif $has_issues; then
-        printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name"
-    else
-        printf "  ✓  %s\n" "$name"
-    fi
-done
+    log_info "Generated files:"
+    for txt in sum dat val log; do
+        local -n out_ref="out_$txt"
+        local -n msg_ref="msg_$txt"
+        log_info "$(printf "  %-24s %s" "$out_ref" "$msg_ref")"
+    done
+}
 
-echo ""
-echo "=== Summary ==="
-total=${#operators[@]}
-missing_count=${#missing[@]}
-issues_count=${#issue_names[@]}
-passed_count=$((total - missing_count - issues_count))
-printf "  %-14s %d\n" "Total:" "$total"
-printf "  %-14s %d\n" "Passed:" "$passed_count"
-printf "  %-14s %d\n" "Not found:" "$missing_count"
-printf "  %-14s %d\n" "With issues:" "$issues_count"
+main() {
+    TMPDIR="$(mktemp -d)"
+    FILE_FBC="$TMPDIR/fbc.yaml"
+    FILE_LOG="$TMPDIR/slog.json"
+    FILE_VAL="$TMPDIR/validation.jsonl"
+    FILE_SUM="$TMPDIR/summary.txt"
+    trap 'rm -rf "$TMPDIR"' EXIT
 
-echo ""
-echo "=== Validation issues detail ==="
-json_issues_count="$(echo "$issues_json" | jq 'length')"
-if [[ "$json_issues_count" -eq 0 ]]; then
-    echo "  (none)"
-else
-    echo "$issues_json" | jq -r '.[] | "  \(.packageName):", ("    " + (.reasons // [] | .[] | "- " + .))'
-fi
+    parse_args "$@"
+    check_dependencies
 
-echo ""
-echo "Output files saved to: $outdir/"
-if $validate_only; then
-    echo "  plcc-dump.json       Filtered PLCC data"
-else
-    echo "  fbc-output.yaml      FBC blobs"
-fi
-echo "  validation.jsonl     Validation results"
-echo "  slog.json            Operational log"
+    mkdir -p "$OUTDIR"
+
+    build_plcc2fbc
+    run_plcc2fbc
+
+    RESULTS_MISSING=()
+    RESULTS_OPWITHISSUES=()
+    RESULTS_ISSUES=""
+    parse_results
+    derive_operators_from_output
+
+    print_operator_list
+    print_summary
+    print_issues_detail
+
+    copy_output_files
+}
+
+main "$@"
