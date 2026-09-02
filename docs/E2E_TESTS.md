@@ -60,7 +60,7 @@ This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API leve
 
 ## Golden File Update Workflow
 
-When a code change intentionally alters the FBC output (new filter, converter change, schema update), the reference files must be regenerated. Two Makefile targets handle this:
+When a code change intentionally alters the FBC output (new filter, converter change, schema update), the reference files must be regenerated. Three Makefile targets handle this:
 
 **`make update-e2e`** — Regenerates both reference YAMLs from the existing `testdata/plcc.json`:
 
@@ -80,7 +80,7 @@ make update-e2e
 
 Use this to refresh the upstream data snapshot. Both the input and references are updated together.
 
-**`plcc-check/operators-summary.txt` and `plcc-check/operators-validation.jsonl`** have no Makefile target since they're small, hand-reviewed fixtures. Regenerate them if `TestPlccCheckOperatorsFile` legitimately changes behavior:
+**`make update-e2e-plcc-check`** — Regenerates `plcc-check/operators-summary.txt` and `plcc-check/operators-validation.jsonl`, the small, hand-reviewed fixtures for `TestPlccCheckOperatorsFile`:
 
 ```sh
 out=$(mktemp -d)
@@ -88,6 +88,8 @@ out=$(mktemp -d)
 sed "s#$out#\$OUTDIR#g" "$out/summary.txt" > test/e2e/testdata/plcc-check/operators-summary.txt
 cp "$out/validation.jsonl" test/e2e/testdata/plcc-check/operators-validation.jsonl
 ```
+
+Review the diff carefully — these are hand-reviewed fixtures, not a bulk snapshot. Run this if `TestPlccCheckOperatorsFile` legitimately changes behavior (e.g. a change to `scripts/plcc-check.sh` or the validators it exercises).
 
 If `TestPlccCheckAllPackages`'s expected counts (`Total`, `Passed`, `Not found`, `With issues`) change, update the literal strings in `test/e2e/plcc_check_test.go` directly — there's no golden file for that test's `summary.txt`, since diffing the full ~150-package file isn't worth the review overhead.
 
