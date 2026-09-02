@@ -284,8 +284,7 @@ print_operator_list() {
         (( ${#name} > max_len )) && max_len=${#name}
     done
 
-    log_info ""
-    log_info "=== Requested operators ==="
+    log_info "\n=== Requested operators ==="
     for name in "${g_operators[@]}"; do
         _classify_operator "$name"
         case "$g_classify_result" in
@@ -298,8 +297,7 @@ print_operator_list() {
 }
 
 print_summary() {
-    log_info ""
-    log_info "=== Summary ==="
+    log_info "\n=== Summary ==="
     local total=${#g_operators[@]}
     local missing_count=${#g_results_missing[@]}
     local duplicated_count=${#g_results_duplicated[@]}
@@ -313,8 +311,7 @@ print_summary() {
 }
 
 print_issues_detail() {
-    log_info ""
-    log_info "=== Validation issues detail ==="
+    log_info "\n=== Validation issues detail ==="
     local json_issues_count
     json_issues_count="$(echo "$g_results_issues" | jq 'length')"
     if [[ "$json_issues_count" -eq 0 ]]; then
@@ -325,7 +322,6 @@ print_issues_detail() {
 }
 
 print_csv_lists() {
-    log_info ""
     log_info "\n=== CSV operator lists ==="
     log_info "- Missing: $(IFS=,; echo "${g_results_missing[*]:-}")"
     log_info "- Duplicated: $(IFS=,; echo "${g_results_duplicated[*]:-}")"
