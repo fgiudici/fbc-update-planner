@@ -17,12 +17,14 @@ set -euo pipefail
 
 # Naming convention: SCREAMING_CASE marks write-once, constant-like values
 # (paths, files); a "g_" prefix marks mutable state shared across functions;
-# everything else is function-local (declared with "local").
+# everything else is function-local (declared with "local"). A leading "_"
+# on a function name marks it as a single-purpose helper for one specific
+# caller, not general-purpose (unlike log_info/log_error).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-usage() {
+_usage() {
     cat <<EOF
 Usage: $(basename "$0") [options] [operators-file]
 
@@ -66,14 +68,14 @@ parse_args() {
             -o)
                 if [[ $# -lt 2 ]]; then
                     echo "Error: -o requires a value" >&2
-                    usage >&2
+                    _usage >&2
                     exit 1
                 fi
                 g_outdir="$2"; shift 2 ;;
             -i)
                 if [[ $# -lt 2 ]]; then
                     echo "Error: -i requires a value" >&2
-                    usage >&2
+                    _usage >&2
                     exit 1
                 fi
                 g_input_file="$2"; shift 2 ;;
@@ -81,12 +83,12 @@ parse_args() {
             --validators)
                 if [[ $# -lt 2 ]]; then
                     echo "Error: --validators requires a value" >&2
-                    usage >&2
+                    _usage >&2
                     exit 1
                 fi
                 g_plcc_validators="$2"; shift 2 ;;
-            -h) usage; exit 0 ;;
-            -*) usage >&2; exit 1 ;;
+            -h) _usage; exit 0 ;;
+            -*) _usage >&2; exit 1 ;;
             *) break ;;
         esac
     done
@@ -96,7 +98,7 @@ parse_args() {
     elif [[ $# -eq 1 ]]; then
         g_operators_file="$1"
     else
-        usage >&2
+        _usage >&2
         exit 1
     fi
 }
@@ -125,10 +127,8 @@ build_plcc2fbc() {
     make -C "$ROOT_DIR" build --quiet
 }
 
-# Reads g_operators_file into the "g_operators" array, skipping blank lines and
-# comments. Sets "g_operators_number" and appends the comma-separated package
-# list to g_plcc2fbc_args via the "pkg_list" local.
-read_operators_file() {
+# Reads g_operators_file into g_operators, skipping blank/comment lines.
+_read_operators_file() {
     if [[ ! -f "$g_operators_file" ]]; then
         log_error "file not found: $g_operators_file"
         exit 1
@@ -162,7 +162,7 @@ run_plcc2fbc() {
 
     g_operators_number="all"
     if [[ -n "$g_operators_file" ]]; then
-        read_operators_file
+        _read_operators_file
     fi
 
     if [[ -n "$g_plcc_validators" ]]; then
@@ -193,12 +193,48 @@ run_plcc2fbc() {
     fi
 }
 
-# Parses missing/failed operators out of FILE_LOG and FILE_VAL. Populates
-# "g_results_missing" (packages not found), "g_results_issues" (validation
-# failures, packageName kept exactly as PLCC recorded it), and
-# "g_results_opwithissues" (sorted unique set of individual package names
-# with issues).
-parse_results() {
+# In "all packages" mode, derives g_operators from the run's own output
+# (no -p flag means package names aren't known ahead of time; missing
+# packages can't be detected in this mode). Requires g_results_withissues
+# to already be populated.
+_derive_operators_from_output() {
+    [[ -n "$g_operators_file" ]] && return
+
+    g_operators=()
+    if $g_validate_only; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && g_operators+=("$name")
+        done < <(jq -r '.data[]?.package // empty' "$FILE_FBC" 2>/dev/null | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    else
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && g_operators+=("$name")
+        done < <(grep '^package:' "$FILE_FBC" 2>/dev/null | sed -e 's/^package:[[:space:]]*//' -e 's/^"//' -e 's/"$//')
+    fi
+    g_operators+=("${g_results_withissues[@]}")
+    if [[ ${#g_operators[@]} -gt 0 ]]; then
+        local sorted=()
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && sorted+=("$name")
+        done < <(printf '%s\n' "${g_operators[@]}" | sort -u)
+        g_operators=("${sorted[@]}")
+    fi
+}
+
+# Classifies operator name "$1" into g_classify_result: "missing", "issues", or "passed".
+_classify_operator() {
+    local name="$1" m
+    for m in "${g_results_missing[@]}"; do
+        [[ "$m" == "$name" ]] && { g_classify_result="missing"; return; }
+    done
+    for m in "${g_results_withissues[@]}"; do
+        [[ "$m" == "$name" ]] && { g_classify_result="issues"; return; }
+    done
+    g_classify_result="passed"
+}
+
+# Populates g_results_missing, g_results_issues, g_results_withissues,
+# g_operators, and g_results_passed from FILE_LOG/FILE_VAL and the run output.
+collect_results() {
     # Missing operators: slog warnings about packages not found in PLCC data.
     while IFS= read -r name; do
         [[ -n "$name" ]] && g_results_missing+=("$name")
@@ -212,33 +248,18 @@ parse_results() {
     # Build the set of individual operator names with issues, splitting any
     # comma-separated packageName so it lines up with individual operator names.
     while IFS= read -r name; do
-        [[ -n "$name" ]] && g_results_opwithissues+=("$name")
+        [[ -n "$name" ]] && g_results_withissues+=("$name")
     done < <(echo "$g_results_issues" | jq -r '.[].packageName' \
         | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sort -u)
-}
 
-# In "all packages" mode we don't know package names ahead of time, so
-# derive the operator list from the run's own output: packages present in
-# the generated FBC (or PLCC dump) passed, packages present in the
-# validation log with issues did not. Missing packages can't be detected in
-# this mode since no -p flag is passed to plcc2fbc.
-derive_operators_from_output() {
-    [[ -n "$g_operators_file" ]] && return
+    _derive_operators_from_output
 
-    g_operators=()
-    if $g_validate_only; then
-        while IFS= read -r name; do
-            [[ -n "$name" ]] && g_operators+=("$name")
-        done < <(jq -r '.data[]?.package // empty' "$FILE_FBC" 2>/dev/null | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-    else
-        while IFS= read -r name; do
-            [[ -n "$name" ]] && g_operators+=("$name")
-        done < <(grep '^package:' "$FILE_FBC" 2>/dev/null | sed -e 's/^package:[[:space:]]*//' -e 's/^"//' -e 's/"$//')
-    fi
-    g_operators+=("${g_results_opwithissues[@]}")
-    if [[ ${#g_operators[@]} -gt 0 ]]; then
-        readarray -t g_operators < <(printf '%s\n' "${g_operators[@]}" | sort -u)
-    fi
+    for name in "${g_operators[@]}"; do
+        _classify_operator "$name"
+        if [[ "$g_classify_result" == "passed" ]]; then
+            g_results_passed+=("$name")
+        fi
+    done
 }
 
 print_operator_list() {
@@ -250,26 +271,12 @@ print_operator_list() {
     log_info ""
     log_info "=== Requested operators ==="
     for name in "${g_operators[@]}"; do
-        local is_missing=false
-        if [[ ${#g_results_missing[@]} -gt 0 ]]; then
-            for m in "${g_results_missing[@]}"; do
-                [[ "$m" == "$name" ]] && is_missing=true && break
-            done
-        fi
-        local has_issues=false
-        if [[ ${#g_results_opwithissues[@]} -gt 0 ]]; then
-            for m in "${g_results_opwithissues[@]}"; do
-                [[ "$m" == "$name" ]] && has_issues=true && break
-            done
-        fi
-
-        if $is_missing; then
-            log_info "$(printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name")"
-        elif $has_issues; then
-            log_info "$(printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name")"
-        else
-            log_info "$(printf "  ✓  %s\n" "$name")"
-        fi
+        _classify_operator "$name"
+        case "$g_classify_result" in
+            missing) log_info "$(printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name")" ;;
+            issues) log_info "$(printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name")" ;;
+            *) log_info "$(printf "  ✓  %s\n" "$name")" ;;
+        esac
     done
 }
 
@@ -278,7 +285,7 @@ print_summary() {
     log_info "=== Summary ==="
     local total=${#g_operators[@]}
     local missing_count=${#g_results_missing[@]}
-    local issues_count=${#g_results_opwithissues[@]}
+    local issues_count=${#g_results_withissues[@]}
     local passed_count=$((total - missing_count - issues_count))
     log_info "$(printf "  %-14s %d\n" "Total:" "$total")"
     log_info "$(printf "  %-14s %d\n" "Passed:" "$passed_count")"
@@ -299,26 +306,22 @@ print_issues_detail() {
 }
 
 print_csv_lists() {
-    local name is_missing has_issues m
-    for name in "${g_operators[@]}"; do
-        is_missing=false
-        for m in "${g_results_missing[@]}"; do
-            [[ "$m" == "$name" ]] && is_missing=true && break
-        done
-        has_issues=false
-        for m in "${g_results_opwithissues[@]}"; do
-            [[ "$m" == "$name" ]] && has_issues=true && break
-        done
-        if ! $is_missing && ! $has_issues; then
-            g_results_passed+=("$name")
-        fi
-    done
-
     log_info ""
     log_info "\n=== CSV operator lists ==="
     log_info "- Missing: $(IFS=,; echo "${g_results_missing[*]:-}")"
-    log_info "- With issues: $(IFS=,; echo "${g_results_opwithissues[*]:-}")"
+    log_info "- With issues: $(IFS=,; echo "${g_results_withissues[*]:-}")"
     log_info "- Passed: $(IFS=,; echo "${g_results_passed[*]:-}")"
+}
+
+# Copies one generated file into g_outdir and logs a summary entry.
+_copy_one_file() {
+    local file="$1" out="$2" msg="$3"
+    if [[ ! -f "$file" ]]; then
+        log_error "file $file not found"
+    else
+        cp -f "$file" "$out"
+    fi
+    log_info "$(printf "  %-24s %s" "$out" "$msg")"
 }
 
 copy_output_files() {
@@ -326,7 +329,6 @@ copy_output_files() {
     local out_VAL="$g_outdir/validation.jsonl"  msg_VAL="Validation results"
     local out_LOG="$g_outdir/slog.json"         msg_LOG="Operational log"
     local out_SUM="$g_outdir/summary.txt"       msg_SUM="Summary"
-    local suffix
 
     if $g_validate_only; then
         out_FBC="$g_outdir/plcc-dump.json"
@@ -337,18 +339,10 @@ copy_output_files() {
     fi
 
     log_info "\n === Generated files ==="
-    for suffix in FBC VAL LOG SUM; do
-        local -n file_ref="FILE_$suffix"
-        local -n out_ref="out_$suffix"
-        local -n msg_ref="msg_$suffix"
-        if [[ ! -f "$file_ref" ]]; then
-            log_error "file $file_ref not found"
-        else
-            cp -f "$file_ref" "$out_ref"
-        fi
-
-        log_info "$(printf "  %-24s %s" "$out_ref" "$msg_ref")"
-    done
+    _copy_one_file "$FILE_FBC" "$out_FBC" "$msg_FBC"
+    _copy_one_file "$FILE_VAL" "$out_VAL" "$msg_VAL"
+    _copy_one_file "$FILE_LOG" "$out_LOG" "$msg_LOG"
+    _copy_one_file "$FILE_SUM" "$out_SUM" "$msg_SUM"
 }
 
 main() {
@@ -368,11 +362,10 @@ main() {
     run_plcc2fbc
 
     g_results_missing=()
-    g_results_opwithissues=()
+    g_results_withissues=()
     g_results_passed=()
     g_results_issues=""
-    parse_results
-    derive_operators_from_output
+    collect_results
 
     print_operator_list
     print_summary
