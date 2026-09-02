@@ -210,7 +210,8 @@ _derive_operators_from_output() {
             [[ -n "$name" ]] && g_operators+=("$name")
         done < <(grep '^package:' "$FILE_FBC" 2>/dev/null | sed -e 's/^package:[[:space:]]*//' -e 's/^"//' -e 's/"$//')
     fi
-    g_operators+=("${g_results_withissues[@]}" "${g_results_duplicated[@]}")
+    [[ ${#g_results_withissues[@]} -gt 0 ]] && g_operators+=("${g_results_withissues[@]}")
+    [[ ${#g_results_duplicated[@]} -gt 0 ]] && g_operators+=("${g_results_duplicated[@]}")
     if [[ ${#g_operators[@]} -gt 0 ]]; then
         local sorted=()
         while IFS= read -r name; do
@@ -224,15 +225,21 @@ _derive_operators_from_output() {
 # "duplicated", "issues", or "passed".
 _classify_operator() {
     local name="$1" m
-    for m in "${g_results_missing[@]}"; do
-        [[ "$m" == "$name" ]] && { g_classify_result="missing"; return; }
-    done
-    for m in "${g_results_duplicated[@]}"; do
-        [[ "$m" == "$name" ]] && { g_classify_result="duplicated"; return; }
-    done
-    for m in "${g_results_withissues[@]}"; do
-        [[ "$m" == "$name" ]] && { g_classify_result="issues"; return; }
-    done
+    if [[ ${#g_results_missing[@]} -gt 0 ]]; then
+        for m in "${g_results_missing[@]}"; do
+            [[ "$m" == "$name" ]] && { g_classify_result="missing"; return; }
+        done
+    fi
+    if [[ ${#g_results_duplicated[@]} -gt 0 ]]; then
+        for m in "${g_results_duplicated[@]}"; do
+            [[ "$m" == "$name" ]] && { g_classify_result="duplicated"; return; }
+        done
+    fi
+    if [[ ${#g_results_withissues[@]} -gt 0 ]]; then
+        for m in "${g_results_withissues[@]}"; do
+            [[ "$m" == "$name" ]] && { g_classify_result="issues"; return; }
+        done
+    fi
     g_classify_result="passed"
 }
 
@@ -270,30 +277,36 @@ collect_results() {
 
     _derive_operators_from_output
 
-    for name in "${g_operators[@]}"; do
-        _classify_operator "$name"
-        if [[ "$g_classify_result" == "passed" ]]; then
-            g_results_passed+=("$name")
-        fi
-    done
+    if [[ ${#g_operators[@]} -gt 0 ]]; then
+        for name in "${g_operators[@]}"; do
+            _classify_operator "$name"
+            if [[ "$g_classify_result" == "passed" ]]; then
+                g_results_passed+=("$name")
+            fi
+        done
+    fi
 }
 
 print_operator_list() {
     local max_len=0
-    for name in "${g_operators[@]}"; do
-        (( ${#name} > max_len )) && max_len=${#name}
-    done
+    if [[ ${#g_operators[@]} -gt 0 ]]; then
+        for name in "${g_operators[@]}"; do
+            (( ${#name} > max_len )) && max_len=${#name}
+        done
+    fi
 
     log_info "\n=== Requested operators ==="
-    for name in "${g_operators[@]}"; do
-        _classify_operator "$name"
-        case "$g_classify_result" in
-            missing) log_info "$(printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name")" ;;
-            duplicated) log_info "$(printf "  ≡  %-${max_len}s  [DUPLICATED]\n" "$name")" ;;
-            issues) log_info "$(printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name")" ;;
-            *) log_info "$(printf "  ✓  %s\n" "$name")" ;;
-        esac
-    done
+    if [[ ${#g_operators[@]} -gt 0 ]]; then
+        for name in "${g_operators[@]}"; do
+            _classify_operator "$name"
+            case "$g_classify_result" in
+                missing) log_info "$(printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name")" ;;
+                duplicated) log_info "$(printf "  ≡  %-${max_len}s  [DUPLICATED]\n" "$name")" ;;
+                issues) log_info "$(printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name")" ;;
+                *) log_info "$(printf "  ✓  %s\n" "$name")" ;;
+            esac
+        done
+    fi
 }
 
 print_summary() {
