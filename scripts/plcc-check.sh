@@ -196,7 +196,7 @@ run_plcc2fbc() {
 # In "all packages" mode, derives g_operators from the run's own output
 # (no -p flag means package names aren't known ahead of time; missing
 # packages can't be detected in this mode). Requires g_results_withissues
-# to already be populated.
+# and g_results_duplicated to already be populated.
 _derive_operators_from_output() {
     [[ -n "$g_operators_file" ]] && return
 
@@ -210,7 +210,7 @@ _derive_operators_from_output() {
             [[ -n "$name" ]] && g_operators+=("$name")
         done < <(grep '^package:' "$FILE_FBC" 2>/dev/null | sed -e 's/^package:[[:space:]]*//' -e 's/^"//' -e 's/"$//')
     fi
-    g_operators+=("${g_results_withissues[@]}")
+    g_operators+=("${g_results_withissues[@]}" "${g_results_duplicated[@]}")
     if [[ ${#g_operators[@]} -gt 0 ]]; then
         local sorted=()
         while IFS= read -r name; do
@@ -220,11 +220,15 @@ _derive_operators_from_output() {
     fi
 }
 
-# Classifies operator name "$1" into g_classify_result: "missing", "issues", or "passed".
+# Classifies operator name "$1" into g_classify_result: "missing",
+# "duplicated", "issues", or "passed".
 _classify_operator() {
     local name="$1" m
     for m in "${g_results_missing[@]}"; do
         [[ "$m" == "$name" ]] && { g_classify_result="missing"; return; }
+    done
+    for m in "${g_results_duplicated[@]}"; do
+        [[ "$m" == "$name" ]] && { g_classify_result="duplicated"; return; }
     done
     for m in "${g_results_withissues[@]}"; do
         [[ "$m" == "$name" ]] && { g_classify_result="issues"; return; }
@@ -233,7 +237,8 @@ _classify_operator() {
 }
 
 # Populates g_results_missing, g_results_issues, g_results_withissues,
-# g_operators, and g_results_passed from FILE_LOG/FILE_VAL and the run output.
+# g_results_duplicated, g_operators, and g_results_passed from FILE_LOG/
+# FILE_VAL and the run output.
 collect_results() {
     # Missing operators: slog warnings about packages not found in PLCC data.
     while IFS= read -r name; do
@@ -245,11 +250,22 @@ collect_results() {
     # list for products not yet expanded into separate packages).
     g_results_issues="$(jq -s '[.[] | select((.reasons | length) > 0)]' "$FILE_VAL" 2>/dev/null || echo '[]')"
 
-    # Build the set of individual operator names with issues, splitting any
-    # comma-separated packageName so it lines up with individual operator names.
+    # REQ-VAL-01 (duplicate package name across products) is a catalog-level
+    # rejection, mutually exclusive with per-product issues: a duplicate is
+    # dropped before per-product validation ever runs, so it can't also carry
+    # other reasons. Split it into its own bucket rather than lumping it into
+    # g_results_withissues.
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && g_results_duplicated+=("$name")
+    done < <(echo "$g_results_issues" | jq -r '.[] | select(any(.reasons[]; startswith("REQ-VAL-01"))) | .packageName' \
+        | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sort -u)
+
+    # Build the set of individual operator names with (non-duplicate) issues,
+    # splitting any comma-separated packageName so it lines up with individual
+    # operator names.
     while IFS= read -r name; do
         [[ -n "$name" ]] && g_results_withissues+=("$name")
-    done < <(echo "$g_results_issues" | jq -r '.[].packageName' \
+    done < <(echo "$g_results_issues" | jq -r '.[] | select(any(.reasons[]; startswith("REQ-VAL-01")) | not) | .packageName' \
         | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sort -u)
 
     _derive_operators_from_output
@@ -274,6 +290,7 @@ print_operator_list() {
         _classify_operator "$name"
         case "$g_classify_result" in
             missing) log_info "$(printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name")" ;;
+            duplicated) log_info "$(printf "  ≡  %-${max_len}s  [DUPLICATED]\n" "$name")" ;;
             issues) log_info "$(printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name")" ;;
             *) log_info "$(printf "  ✓  %s\n" "$name")" ;;
         esac
@@ -285,11 +302,13 @@ print_summary() {
     log_info "=== Summary ==="
     local total=${#g_operators[@]}
     local missing_count=${#g_results_missing[@]}
+    local duplicated_count=${#g_results_duplicated[@]}
     local issues_count=${#g_results_withissues[@]}
-    local passed_count=$((total - missing_count - issues_count))
+    local passed_count=$((total - missing_count - duplicated_count - issues_count))
     log_info "$(printf "  %-14s %d\n" "Total:" "$total")"
     log_info "$(printf "  %-14s %d\n" "Passed:" "$passed_count")"
     log_info "$(printf "  %-14s %d\n" "Not found:" "$missing_count")"
+    log_info "$(printf "  %-14s %d\n" "Duplicated:" "$duplicated_count")"
     log_info "$(printf "  %-14s %d\n" "With issues:" "$issues_count")"
 }
 
@@ -309,6 +328,7 @@ print_csv_lists() {
     log_info ""
     log_info "\n=== CSV operator lists ==="
     log_info "- Missing: $(IFS=,; echo "${g_results_missing[*]:-}")"
+    log_info "- Duplicated: $(IFS=,; echo "${g_results_duplicated[*]:-}")"
     log_info "- With issues: $(IFS=,; echo "${g_results_withissues[*]:-}")"
     log_info "- Passed: $(IFS=,; echo "${g_results_passed[*]:-}")"
 }
@@ -363,6 +383,7 @@ main() {
 
     g_results_missing=()
     g_results_withissues=()
+    g_results_duplicated=()
     g_results_passed=()
     g_results_issues=""
     collect_results

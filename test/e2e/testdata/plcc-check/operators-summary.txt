@@ -10,6 +10,7 @@ Running plcc2fbc with 3 operators...
   Total:         3
   Passed:        1
   Not found:     1
+  Duplicated:    0
   With issues:   1
 
 === Validation issues detail ===
@@ -21,6 +22,7 @@ Running plcc2fbc with 3 operators...
 
 === CSV operator lists ===
 - Missing: totally-nonexistent-operator-xyz
+- Duplicated: 
 - With issues: barbican-operator
 - Passed: aws-efs-csi-driver-operator
 
