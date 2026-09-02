@@ -59,6 +59,7 @@ make test               # go test -v -count 1 ./...
 make e2e                # go test -v -count 1 ./test/e2e/
 make update-e2e         # regenerate e2e reference files from existing testdata/plcc.json
 make update-e2e-source  # fetch fresh plcc.json from PLCC API + regenerate references
+make update-e2e-plcc-check  # regenerate plcc-check.sh e2e golden files from existing testdata/plcc.json
 make generate-fbc       # build + run against live PLCC API, write YAML + logs to fbc-samples/
 ```
 

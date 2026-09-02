@@ -218,6 +218,7 @@ func TestPlccCheckAllPackages(t *testing.T) {
 		"Total:         142",
 		"Passed:        61",
 		"Not found:     0",
+		"Duplicated:    0",
 		"With issues:   81",
 	} {
 		if !strings.Contains(string(summary), want) {
