@@ -236,7 +236,8 @@ fetch_catalog_packages() {
 
     g_catalog_packages=()
     while IFS= read -r name; do
-        [[ -n "$name" ]] && g_catalog_packages+=("$name")
+        [[ -z "$name" ]] && continue
+        g_catalog_packages+=("$name")
     done < "$FILE_CATALOG"
 }
 
@@ -378,7 +379,9 @@ collect_results() {
             fi
             if [[ "$g_classify_result" == "passed" ]]; then
                 g_results_plccok+=("$name")
-                $is_in_catalog && g_results_allpassed+=("$name")
+                if $is_in_catalog; then
+                    g_results_allpassed+=("$name")
+                fi
             fi
         done
     fi

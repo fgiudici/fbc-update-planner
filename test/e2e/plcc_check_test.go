@@ -225,6 +225,28 @@ func TestPlccCheckCatalogPresence(t *testing.T) {
 	}
 }
 
+// TestPlccCheckCatalogEmptyPackageName is a regression test for a bash
+// pitfall in fetch_catalog_packages: its final statement used to be a bare
+// "[[ -n "$name" ]] && arr+=(...)" with nothing after it. Under "set -e",
+// if that guard evaluates false on the last line read, the function's exit
+// status becomes non-zero and the whole script dies silently. That trigger
+// requires an empty catalog package name to sort last, which happens when a
+// catalog schema entry has an empty (but present) "package" field and it's
+// the only entry opm renders; testdata/catalog-fbc-empty-package reproduces
+// that. This only checks the script survives, not its output content.
+func TestPlccCheckCatalogEmptyPackageName(t *testing.T) {
+	outDir := t.TempDir()
+	_, stderr, exitCode := runPlccCheck(t,
+		"-i", "testdata/plcc.json",
+		"-o", outDir,
+		"--catalog-image", "testdata/catalog-fbc-empty-package",
+		"testdata/plcc-check-operators.txt",
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code %d; stderr:\n%s", exitCode, stderr)
+	}
+}
+
 // TestPlccCheckAllPackages runs plcc-check.sh with no operators file (the
 // "check everything in PLCC" mode) and no validators, so the resulting FBC
 // output can be compared byte-for-byte against the existing e2e reference.
