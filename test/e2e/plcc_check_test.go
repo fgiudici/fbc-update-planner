@@ -84,8 +84,9 @@ func slogField(t *testing.T, line string, field string) any {
 }
 
 // TestPlccCheckOperatorsFile runs plcc-check.sh against a small, fixed
-// operators file (one passing, one failing, one missing package) so the
-// generated files can be compared against small, reviewable golden fixtures.
+// operators file (one passing, one failing, one missing, and one duplicated
+// package) so the generated files can be compared against small, reviewable
+// golden fixtures.
 func TestPlccCheckOperatorsFile(t *testing.T) {
 	outDir := t.TempDir()
 	_, stderr, exitCode := runPlccCheck(t,
@@ -188,7 +189,7 @@ func TestPlccCheckOperatorsFile(t *testing.T) {
 // works the same against a local directory as against a remote image) to
 // exercise the catalog-membership check. testdata/catalog-fbc contains
 // aws-efs-csi-driver-operator only, so it hits both a catalog-present and a
-// catalog-absent operator from the shared 3-operator fixture.
+// catalog-absent operator from the shared 4-operator fixture.
 func TestPlccCheckCatalogPresence(t *testing.T) {
 	outDir := t.TempDir()
 	_, stderr, exitCode := runPlccCheck(t,

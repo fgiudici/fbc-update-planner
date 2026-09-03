@@ -41,7 +41,7 @@ This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API leve
 
 | Test | Mode | What It Verifies |
 |------|------|-------------------|
-| `TestPlccCheckOperatorsFile` | `plcc-check-operators.txt` (3 packages: pass/issues/missing) | `summary.txt`, `validation.jsonl`, `fbc-output.yaml`, and `slog.json` message sequence match golden fixtures |
+| `TestPlccCheckOperatorsFile` | `plcc-check-operators.txt` (4 packages: pass/issues/missing/duplicate) | `summary.txt`, `validation.jsonl`, `fbc-output.yaml`, and `slog.json` message sequence match golden fixtures |
 | `TestPlccCheckCatalogPresence` | `plcc-check-operators.txt` + `--catalog-image testdata/catalog-fbc` | `summary.txt` (PLCC/CATALOG table, with a leading "fully done" marker) matches golden; `catalog-packages.txt` lists the one package present in the fixture |
 | `TestPlccCheckAllPackages` | no operators file (full dataset), `--validators none` | `fbc-output.yaml` matches `reference-fbc.yaml` byte-for-byte; `summary.txt` reports the expected pass/fail counts |
 
