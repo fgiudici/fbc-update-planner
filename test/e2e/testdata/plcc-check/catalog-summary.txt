@@ -1,12 +1,13 @@
 Building plcc2fbc...
 Running plcc2fbc with 4 operators...
+Fetching catalog package list from $CATALOG_IMAGE...
 
 === Requested operators ===
-     PLCC       OPERATOR
-  *  OK         aws-efs-csi-driver-operator     
-     INVALID    barbican-operator               
-     MISSING    totally-nonexistent-operator-xyz
-     DUPLICATE  amq-streams                     
+     PLCC       CATALOG  OPERATOR
+  *  OK         OK       aws-efs-csi-driver-operator     
+     INVALID    MISSING  barbican-operator               
+     MISSING    MISSING  totally-nonexistent-operator-xyz
+     DUPLICATE  MISSING  amq-streams                     
 
 === Summary ===
   Total operators:   4
@@ -14,6 +15,9 @@ Running plcc2fbc with 4 operators...
   PLCC DUPLICATE:    1 / 4
   PLCC INVALID:      1 / 4
   PLCC MISSING:      1 / 4
+  CATALOG OK:        1 / 4
+  CATALOG MISSING:   3 / 4
+  Fully done:        1 / 4
 
 === Validation issues detail ===
   amq-streams:
@@ -28,8 +32,11 @@ Running plcc2fbc with 4 operators...
 - Duplicated: amq-streams
 - With issues: barbican-operator
 - PLCC OK: aws-efs-csi-driver-operator
+- Catalog missing: barbican-operator,totally-nonexistent-operator-xyz,amq-streams
+- Fully done: aws-efs-csi-driver-operator
 
  === Generated files ===
   $OUTDIR/fbc-output.yaml FBC blobs
   $OUTDIR/validation.jsonl Validation results
   $OUTDIR/slog.json Operational log
+  $OUTDIR/catalog-packages.txt Catalog package list

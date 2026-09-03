@@ -167,7 +167,7 @@ func TestPlccCheckOperatorsFile(t *testing.T) {
 		var want map[string]any
 		switch gotMsgs[i] {
 		case "filtered products":
-			want = map[string]any{"count": float64(2)}
+			want = map[string]any{"count": float64(4)}
 		case "PLCC product validation":
 			want = map[string]any{"passed": float64(1), "filtered": float64(1)}
 		case "wrote FBC data":
@@ -180,6 +180,47 @@ func TestPlccCheckOperatorsFile(t *testing.T) {
 				t.Errorf("slog line %q: field %q = %v, want %v", gotMsgs[i], field, got, wantVal)
 			}
 		}
+	}
+}
+
+// TestPlccCheckCatalogPresence runs plcc-check.sh with --catalog-image
+// pointed at a local FBC directory (no registry/network needed; opm render
+// works the same against a local directory as against a remote image) to
+// exercise the catalog-membership check. testdata/catalog-fbc contains
+// aws-efs-csi-driver-operator only, so it hits both a catalog-present and a
+// catalog-absent operator from the shared 3-operator fixture.
+func TestPlccCheckCatalogPresence(t *testing.T) {
+	outDir := t.TempDir()
+	_, stderr, exitCode := runPlccCheck(t,
+		"-i", "testdata/plcc.json",
+		"-o", outDir,
+		"--catalog-image", "testdata/catalog-fbc",
+		"testdata/plcc-check-operators.txt",
+	)
+	if exitCode != 0 {
+		t.Fatalf("exit code %d; stderr:\n%s", exitCode, stderr)
+	}
+
+	summary, err := os.ReadFile(filepath.Join(outDir, "summary.txt"))
+	if err != nil {
+		t.Fatalf("reading summary.txt: %v", err)
+	}
+	gotSummary := strings.ReplaceAll(string(summary), outDir, "$OUTDIR")
+	gotSummary = strings.ReplaceAll(gotSummary, "testdata/catalog-fbc", "$CATALOG_IMAGE")
+	wantSummary, err := os.ReadFile("testdata/plcc-check/catalog-summary.txt")
+	if err != nil {
+		t.Fatalf("reading golden summary: %v", err)
+	}
+	if gotSummary != string(wantSummary) {
+		t.Errorf("summary.txt mismatch:\ngot:\n%s\nwant:\n%s", gotSummary, wantSummary)
+	}
+
+	catalogPackages, err := os.ReadFile(filepath.Join(outDir, "catalog-packages.txt"))
+	if err != nil {
+		t.Fatalf("reading catalog-packages.txt: %v", err)
+	}
+	if string(catalogPackages) != "aws-efs-csi-driver-operator\n" {
+		t.Errorf("catalog-packages.txt = %q, want %q", catalogPackages, "aws-efs-csi-driver-operator\n")
 	}
 }
 
@@ -215,11 +256,10 @@ func TestPlccCheckAllPackages(t *testing.T) {
 		t.Fatalf("reading summary.txt: %v", err)
 	}
 	for _, want := range []string{
-		"Total:         142",
-		"Passed:        61",
-		"Not found:     0",
-		"Duplicated:    0",
-		"With issues:   81",
+		"Total operators:   142",
+		"PLCC OK:           61 / 142",
+		"PLCC INVALID:      81 / 142",
+		"PLCC MISSING:      0 / 142",
 	} {
 		if !strings.Contains(string(summary), want) {
 			t.Errorf("summary.txt missing expected line %q; full summary:\n%s", want, summary)

@@ -22,6 +22,15 @@ jobs:
       - name: Run tests
         run: make test
 
+      - name: Install opm
+        env:
+          OPM_VERSION: v1.74.0
+        run: |
+          curl -sSfL -o /tmp/opm \
+            "https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-amd64-opm"
+          chmod +x /tmp/opm
+          sudo install /tmp/opm /usr/local/bin/opm
+
       - name: Run e2e tests
         run: make e2e
 
