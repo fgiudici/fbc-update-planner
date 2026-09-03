@@ -44,6 +44,8 @@ Options:
   --plcc             Validate PLCC data only (skip FBC generation)
   --validators <v>   Comma-separated validators to run (passed through to plcc2fbc;
                      use "none" to skip PLCC validation entirely)
+  --catalog-image <ref>  Also check whether each operator's FBC lifecycle data is
+                     present in the given OCP catalog image. Off by default; requires opm.
   -h                 Show this help
 
 Example usage:
@@ -52,6 +54,8 @@ Example usage:
 ./plcc-check.sh --plcc -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --validators none -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --validators syntax -o \$(date +%y%m%d) top-operators > summary.txt
+./plcc-check.sh --catalog-image registry.redhat.io/redhat/redhat-operator-index:v5.0 \\
+    -o \$(date +%y%m%d) top-operators > summary.txt
 EOF
 }
 
@@ -61,6 +65,7 @@ g_input_file=""
 g_validate_only=false
 g_plcc_validators=""
 g_operators_file=""
+g_catalog_image=""
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -87,6 +92,13 @@ parse_args() {
                     exit 1
                 fi
                 g_plcc_validators="$2"; shift 2 ;;
+            --catalog-image)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --catalog-image requires a value" >&2
+                    _usage >&2
+                    exit 1
+                fi
+                g_catalog_image="$2"; shift 2 ;;
             -h) _usage; exit 0 ;;
             -*) _usage >&2; exit 1 ;;
             *) break ;;
@@ -118,6 +130,10 @@ check_dependencies() {
     fi
     if ! command -v tee &>/dev/null; then
         log_error "tee is required but not found in PATH"
+        exit 1
+    fi
+    if [[ -n "$g_catalog_image" ]] && ! command -v opm &>/dev/null; then
+        log_error "opm is required for --catalog-image but not found in PATH"
         exit 1
     fi
 }
@@ -193,6 +209,48 @@ run_plcc2fbc() {
     fi
 }
 
+# Renders $g_catalog_image with opm and populates g_catalog_packages with the
+# sorted, unique set of package names carrying FBC lifecycle data. Aborts the
+# run if opm fails (bad image ref, auth, network): a broken catalog fetch
+# means no per-operator catalog claim can be trusted for this run.
+fetch_catalog_packages() {
+    [[ -z "$g_catalog_image" ]] && return
+
+    log_info "Fetching catalog package list from $g_catalog_image..."
+    local exit_code
+    set +e
+    opm render "$g_catalog_image" >"$WORK_DIR/catalog-render.json" 2>"$WORK_DIR/opm-stderr.log"
+    exit_code=$?
+    set -e
+
+    if [[ "$exit_code" -ne 0 ]]; then
+        log_error "opm render failed for catalog image $g_catalog_image"
+        if [[ -s "$WORK_DIR/opm-stderr.log" ]]; then
+            cat "$WORK_DIR/opm-stderr.log" >&2
+        fi
+        exit 1
+    fi
+
+    jq -r 'select(.schema == "io.openshift.operators.lifecycles.v1alpha1") | .package' \
+        "$WORK_DIR/catalog-render.json" | sort -u >"$FILE_CATALOG"
+
+    g_catalog_packages=()
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && g_catalog_packages+=("$name")
+    done < "$FILE_CATALOG"
+}
+
+# True (exit 0) if "$1" is present in g_catalog_packages.
+in_catalog() {
+    local name="$1" p
+    if [[ ${#g_catalog_packages[@]} -gt 0 ]]; then
+        for p in "${g_catalog_packages[@]}"; do
+            [[ "$p" == "$name" ]] && return 0
+        done
+    fi
+    return 1
+}
+
 # In "all packages" mode, derives g_operators from the run's own output
 # (no -p flag means package names aren't known ahead of time; missing
 # packages can't be detected in this mode). Requires g_results_withissues
@@ -243,9 +301,42 @@ _classify_operator() {
     g_classify_result="passed"
 }
 
+# Computes the per-operator checks for name "$1": g_mark_plcc ("OK",
+# "DUPLICATE", "INVALID", or "MISSING"), g_mark_catalog ("OK"/"MISSING", or
+# "-" when --catalog-image wasn't given), and g_mark_done ("*" when every
+# enabled check is "OK", for a quick at-a-glance scan; "" otherwise);
+# The catalog check runs regardless of the PLCC outcome: a package can
+# disappear from PLCC or fail validation while still being served from an
+# older, stale catalog build, which is itself worth surfacing.
+_check_marks() {
+    local name="$1"
+    _classify_operator "$name"
+
+    case "$g_classify_result" in
+        missing) g_mark_plcc="MISSING" ;;
+        passed) g_mark_plcc="OK" ;;
+        duplicated) g_mark_plcc="DUPLICATE" ;;
+        *) g_mark_plcc="INVALID" ;;
+    esac
+
+    g_mark_catalog="-"
+    if [[ -n "$g_catalog_image" ]]; then
+        if in_catalog "$name"; then
+            g_mark_catalog="OK"
+        else
+            g_mark_catalog="MISSING"
+        fi
+    fi
+
+    g_mark_done=""
+    if [[ "$g_mark_plcc" == "OK" ]] && { [[ -z "$g_catalog_image" ]] || [[ "$g_mark_catalog" == "OK" ]]; }; then
+        g_mark_done="*"
+    fi
+}
+
 # Populates g_results_missing, g_results_issues, g_results_withissues,
-# g_results_duplicated, g_operators, and g_results_passed from FILE_LOG/
-# FILE_VAL and the run output.
+# g_results_duplicated, g_operators, g_results_notincatalog, g_results_plccok,
+# and g_results_allpassed from FILE_LOG/FILE_VAL and the run output.
 collect_results() {
     # Missing operators: slog warnings about packages not found in PLCC data.
     while IFS= read -r name; do
@@ -280,8 +371,14 @@ collect_results() {
     if [[ ${#g_operators[@]} -gt 0 ]]; then
         for name in "${g_operators[@]}"; do
             _classify_operator "$name"
+            local is_in_catalog=true
+            if [[ -n "$g_catalog_image" ]] && ! in_catalog "$name"; then
+                is_in_catalog=false
+                g_results_notincatalog+=("$name")
+            fi
             if [[ "$g_classify_result" == "passed" ]]; then
-                g_results_passed+=("$name")
+                g_results_plccok+=("$name")
+                $is_in_catalog && g_results_allpassed+=("$name")
             fi
         done
     fi
@@ -296,15 +393,21 @@ print_operator_list() {
     fi
 
     log_info "\n=== Requested operators ==="
+    if [[ -n "$g_catalog_image" ]]; then
+        log_info "$(printf "  %-1s  %-9s  %-7s  %s\n" " " "PLCC" "CATALOG" "OPERATOR")"
+    else
+        log_info "$(printf "  %-1s  %-9s  %s\n" " " "PLCC" "OPERATOR")"
+    fi
     if [[ ${#g_operators[@]} -gt 0 ]]; then
         for name in "${g_operators[@]}"; do
-            _classify_operator "$name"
-            case "$g_classify_result" in
-                missing) log_info "$(printf "  ✗  %-${max_len}s  [NOT FOUND]\n" "$name")" ;;
-                duplicated) log_info "$(printf "  ≡  %-${max_len}s  [DUPLICATED]\n" "$name")" ;;
-                issues) log_info "$(printf "  !  %-${max_len}s  [WITH ISSUES]\n" "$name")" ;;
-                *) log_info "$(printf "  ✓  %s\n" "$name")" ;;
-            esac
+            _check_marks "$name"
+            if [[ -n "$g_catalog_image" ]]; then
+                log_info "$(printf "  %-1s  %-9s  %-7s  %-${max_len}s\n" \
+                    "$g_mark_done" "$g_mark_plcc" "$g_mark_catalog" "$name")"
+            else
+                log_info "$(printf "  %-1s  %-9s  %-${max_len}s\n" \
+                    "$g_mark_done" "$g_mark_plcc" "$name")"
+            fi
         done
     fi
 }
@@ -315,12 +418,20 @@ print_summary() {
     local missing_count=${#g_results_missing[@]}
     local duplicated_count=${#g_results_duplicated[@]}
     local issues_count=${#g_results_withissues[@]}
-    local passed_count=$((total - missing_count - duplicated_count - issues_count))
-    log_info "$(printf "  %-14s %d\n" "Total:" "$total")"
-    log_info "$(printf "  %-14s %d\n" "Passed:" "$passed_count")"
-    log_info "$(printf "  %-14s %d\n" "Not found:" "$missing_count")"
-    log_info "$(printf "  %-14s %d\n" "Duplicated:" "$duplicated_count")"
-    log_info "$(printf "  %-14s %d\n" "With issues:" "$issues_count")"
+    local ok_count=$((total - missing_count - duplicated_count - issues_count))
+    log_info "$(printf "  %-18s %d\n" "Total operators:" "$total")"
+    log_info "$(printf "  %-18s %d / %d\n" "PLCC OK:" "$ok_count" "$total")"
+    log_info "$(printf "  %-18s %d / %d\n" "PLCC DUPLICATE:" "$duplicated_count" "$total")"
+    log_info "$(printf "  %-18s %d / %d\n" "PLCC INVALID:" "$issues_count" "$total")"
+    log_info "$(printf "  %-18s %d / %d\n" "PLCC MISSING:" "$missing_count" "$total")"
+    if [[ -n "$g_catalog_image" ]]; then
+        local notincatalog_count=${#g_results_notincatalog[@]}
+        local catalog_ok_count=$((total - notincatalog_count))
+        local done_count=${#g_results_allpassed[@]}
+        log_info "$(printf "  %-18s %d / %d\n" "CATALOG OK:" "$catalog_ok_count" "$total")"
+        log_info "$(printf "  %-18s %d / %d\n" "CATALOG MISSING:" "$notincatalog_count" "$total")"
+        log_info "$(printf "  %-18s %d / %d\n" "Fully done:" "$done_count" "$total")"
+    fi
 }
 
 print_issues_detail() {
@@ -339,7 +450,11 @@ print_csv_lists() {
     log_info "- Missing: $(IFS=,; echo "${g_results_missing[*]:-}")"
     log_info "- Duplicated: $(IFS=,; echo "${g_results_duplicated[*]:-}")"
     log_info "- With issues: $(IFS=,; echo "${g_results_withissues[*]:-}")"
-    log_info "- Passed: $(IFS=,; echo "${g_results_passed[*]:-}")"
+    log_info "- PLCC OK: $(IFS=,; echo "${g_results_plccok[*]:-}")"
+    if [[ -n "$g_catalog_image" ]]; then
+        log_info "- Catalog missing: $(IFS=,; echo "${g_results_notincatalog[*]:-}")"
+        log_info "- Fully done: $(IFS=,; echo "${g_results_allpassed[*]:-}")"
+    fi
 }
 
 # Copies one generated file into g_outdir and logs a summary entry.
@@ -371,6 +486,9 @@ copy_output_files() {
     _copy_one_file "$FILE_FBC" "$out_FBC" "$msg_FBC"
     _copy_one_file "$FILE_VAL" "$out_VAL" "$msg_VAL"
     _copy_one_file "$FILE_LOG" "$out_LOG" "$msg_LOG"
+    if [[ -n "$g_catalog_image" ]]; then
+        _copy_one_file "$FILE_CATALOG" "$g_outdir/catalog-packages.txt" "Catalog package list"
+    fi
     _copy_one_file "$FILE_SUM" "$out_SUM" "$msg_SUM"
 }
 
@@ -380,6 +498,7 @@ main() {
     FILE_LOG="$WORK_DIR/slog.json"
     FILE_VAL="$WORK_DIR/validation.jsonl"
     FILE_SUM="$WORK_DIR/summary.txt"
+    FILE_CATALOG="$WORK_DIR/catalog-packages.txt"
     trap 'rm -rf "$WORK_DIR"' EXIT
 
     parse_args "$@"
@@ -389,11 +508,15 @@ main() {
 
     build_plcc2fbc
     run_plcc2fbc
+    g_catalog_packages=()
+    fetch_catalog_packages
 
     g_results_missing=()
     g_results_withissues=()
     g_results_duplicated=()
-    g_results_passed=()
+    g_results_notincatalog=()
+    g_results_plccok=()
+    g_results_allpassed=()
     g_results_issues=""
     collect_results
 
