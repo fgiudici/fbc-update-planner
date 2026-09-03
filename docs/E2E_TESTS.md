@@ -12,6 +12,8 @@ End-to-end tests exercise the full `plcc2fbc` CLI pipeline — flag parsing, PLC
 
 The e2e package uses a `//go:build e2e` build tag so that `go test ./...` (i.e. `make test`) does not include it. Run with `make e2e` (which passes `-tags=e2e`) to execute the suite.
 
+`make e2e` requires `opm` in `PATH` — `TestPlccCheckCatalogPresence` exercises `scripts/plcc-check.sh --catalog-image` by pointing `opm render` at a local FBC directory fixture (`testdata/catalog-fbc/`), which needs no registry or network access.
+
 This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API level) and `cmd/plcc2fbc/main_test.go` (unit tests for the `run()` function). The e2e suite is the only layer that verifies exit code semantics and the full binary's file I/O behavior.
 
 ---
@@ -40,6 +42,7 @@ This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API leve
 | Test | Mode | What It Verifies |
 |------|------|-------------------|
 | `TestPlccCheckOperatorsFile` | `plcc-check-operators.txt` (3 packages: pass/issues/missing) | `summary.txt`, `validation.jsonl`, `fbc-output.yaml`, and `slog.json` message sequence match golden fixtures |
+| `TestPlccCheckCatalogPresence` | `plcc-check-operators.txt` + `--catalog-image testdata/catalog-fbc` | `summary.txt` (PLCC/CATALOG table, with a leading "fully done" marker) matches golden; `catalog-packages.txt` lists the one package present in the fixture |
 | `TestPlccCheckAllPackages` | no operators file (full dataset), `--validators none` | `fbc-output.yaml` matches `reference-fbc.yaml` byte-for-byte; `summary.txt` reports the expected pass/fail counts |
 
 ---
@@ -55,6 +58,8 @@ This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API leve
 | `plcc-check-operators.txt` | ~150 B | Operators file for `TestPlccCheckOperatorsFile`: one passing package, one with validation issues, one that doesn't exist in `plcc.json`. |
 | `plcc-check/operators-summary.txt` | ~1 KB | Expected `summary.txt` for `TestPlccCheckOperatorsFile`. The output directory's absolute path is normalized to `$OUTDIR` before comparison, since it's a fresh `t.TempDir()` on every run. |
 | `plcc-check/operators-validation.jsonl` | ~400 B | Expected `validation.jsonl` for `TestPlccCheckOperatorsFile`. |
+| `catalog-fbc/` | ~150 B | Local FBC directory fixture for `TestPlccCheckCatalogPresence`: contains lifecycle data for `aws-efs-csi-driver-operator` only (not `barbican-operator`), so `opm render` against it exercises both a catalog-hit and a catalog-miss. |
+| `plcc-check/catalog-summary.txt` | ~1 KB | Expected `summary.txt` for `TestPlccCheckCatalogPresence`. Both `$OUTDIR` and the `--catalog-image` path are normalized before comparison. |
 
 ---
 
@@ -80,18 +85,24 @@ make update-e2e
 
 Use this to refresh the upstream data snapshot. Both the input and references are updated together.
 
-**`make update-e2e-plcc-check`** — Regenerates `plcc-check/operators-summary.txt` and `plcc-check/operators-validation.jsonl`, the small, hand-reviewed fixtures for `TestPlccCheckOperatorsFile`:
+**`make update-e2e-plcc-check`** — Regenerates `plcc-check/operators-summary.txt`, `plcc-check/operators-validation.jsonl`, and `plcc-check/catalog-summary.txt`, the small, hand-reviewed fixtures for `TestPlccCheckOperatorsFile` and `TestPlccCheckCatalogPresence`:
 
 ```sh
 out=$(mktemp -d)
 ./scripts/plcc-check.sh -i test/e2e/testdata/plcc.json -o "$out" test/e2e/testdata/plcc-check-operators.txt
 sed "s#$out#\$OUTDIR#g" "$out/summary.txt" > test/e2e/testdata/plcc-check/operators-summary.txt
 cp "$out/validation.jsonl" test/e2e/testdata/plcc-check/operators-validation.jsonl
+
+out=$(mktemp -d)
+./scripts/plcc-check.sh -i test/e2e/testdata/plcc.json -o "$out" \
+    --catalog-image test/e2e/testdata/catalog-fbc test/e2e/testdata/plcc-check-operators.txt
+sed -e "s#$out#\$OUTDIR#g" -e "s#test/e2e/testdata/catalog-fbc#\$CATALOG_IMAGE#g" \
+    "$out/summary.txt" > test/e2e/testdata/plcc-check/catalog-summary.txt
 ```
 
-Review the diff carefully — these are hand-reviewed fixtures, not a bulk snapshot. Run this if `TestPlccCheckOperatorsFile` legitimately changes behavior (e.g. a change to `scripts/plcc-check.sh` or the validators it exercises).
+Review the diff carefully — these are hand-reviewed fixtures, not a bulk snapshot. Run this if `TestPlccCheckOperatorsFile` or `TestPlccCheckCatalogPresence` legitimately change behavior (e.g. a change to `scripts/plcc-check.sh` or the validators it exercises).
 
-If `TestPlccCheckAllPackages`'s expected counts (`Total`, `Passed`, `Not found`, `With issues`) change, update the literal strings in `test/e2e/plcc_check_test.go` directly — there's no golden file for that test's `summary.txt`, since diffing the full ~150-package file isn't worth the review overhead.
+If `TestPlccCheckAllPackages`'s expected counts (`Total operators`, `PLCC OK`, `PLCC INVALID`, `PLCC MISSING`) change, update the literal strings in `test/e2e/plcc_check_test.go` directly — there's no golden file for that test's `summary.txt`, since diffing the full ~150-package file isn't worth the review overhead.
 
 ---
 
