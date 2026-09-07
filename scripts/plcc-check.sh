@@ -46,6 +46,8 @@ Options:
                      use "none" to skip PLCC validation entirely)
   --catalog-image <ref>  Also check whether each operator's FBC lifecycle data is
                      present in the given OCP catalog image. Off by default; requires opm.
+  --webhook <sections>  Write a Slack webhook payload to <dir>/slack-payload.json.
+                     Supported sections: summary,list (comma-separated).
   -h                 Show this help
 
 Example usage:
@@ -54,6 +56,7 @@ Example usage:
 ./plcc-check.sh --plcc -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --validators none -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --validators syntax -o \$(date +%y%m%d) top-operators > summary.txt
+./plcc-check.sh --webhook summary,list -o \$(date +%y%m%d) top-operators > summary.txt
 ./plcc-check.sh --catalog-image registry.redhat.io/redhat/redhat-operator-index:v5.0 \\
     -o \$(date +%y%m%d) top-operators > summary.txt
 EOF
@@ -66,6 +69,7 @@ g_validate_only=false
 g_plcc_validators=""
 g_operators_file=""
 g_catalog_image=""
+g_webhook_sections=""
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -99,6 +103,17 @@ parse_args() {
                     exit 1
                 fi
                 g_catalog_image="$2"; shift 2 ;;
+            --webhook)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --webhook requires a value" >&2
+                    _usage >&2
+                    exit 1
+                fi
+                if [[ -z "$2" ]]; then
+                    log_error "--webhook requires a comma-separated list of sections: summary,list"
+                    exit 1
+                fi
+                g_webhook_sections="$2"; shift 2 ;;
             -h) _usage; exit 0 ;;
             -*) _usage >&2; exit 1 ;;
             *) break ;;
@@ -112,6 +127,22 @@ parse_args() {
     else
         _usage >&2
         exit 1
+    fi
+
+    if [[ -n "$g_webhook_sections" ]]; then
+        local section
+        local -a sections
+        if [[ "$g_webhook_sections" == ,* || "$g_webhook_sections" == *, || "$g_webhook_sections" == *,,* ]]; then
+            log_error "--webhook requires a comma-separated list of sections: summary,list"
+            exit 1
+        fi
+        IFS=, read -ra sections <<< "$g_webhook_sections"
+        for section in "${sections[@]}"; do
+            if [[ "$section" != "summary" && "$section" != "list" ]]; then
+                log_error "unsupported webhook section: $section (supported: summary,list)"
+                exit 1
+            fi
+        done
     fi
 }
 
@@ -495,6 +526,154 @@ copy_output_files() {
     _copy_one_file "$FILE_SUM" "$out_SUM" "$msg_SUM"
 }
 
+# Returns success when the requested webhook sections contain "$1".
+_webhook_has_section() {
+    [[ ",$g_webhook_sections," == *",$1,"* ]]
+}
+
+# These helpers build record-separated Markdown chunks that stay below
+# Slack's 3000-character section limit.
+_webhook_chunks_start() {
+    g_webhook_chunks_file="$1"
+    g_webhook_chunk=""
+    : > "$g_webhook_chunks_file"
+}
+
+_webhook_chunks_add() {
+    local line="$1"
+    if [[ -n "$g_webhook_chunk" ]] && (( ${#g_webhook_chunk} + ${#line} + 1 > 2800 )); then
+        printf '%s\036' "$g_webhook_chunk" >> "$g_webhook_chunks_file"
+        g_webhook_chunk=""
+    fi
+    [[ -n "$g_webhook_chunk" ]] && g_webhook_chunk+=$'\n'
+    g_webhook_chunk+="$line"
+}
+
+_webhook_chunks_finish() {
+    [[ -n "$g_webhook_chunk" ]] && printf '%s\036' "$g_webhook_chunk" >> "$g_webhook_chunks_file"
+}
+
+_write_ready_operator_chunks() {
+    local file="$1" name
+    _webhook_chunks_start "$file"
+    if [[ ${#g_results_allpassed[@]} -eq 0 ]]; then
+        _webhook_chunks_add '_None_'
+    else
+        for name in "${g_results_allpassed[@]}"; do
+            _webhook_chunks_add "- \`$name\`"
+        done
+    fi
+    _webhook_chunks_finish
+}
+
+_write_requested_operator_chunks() {
+    local file="$1" name line marker
+    local max_name_length=0
+    _webhook_chunks_start "$file"
+    if [[ ${#g_operators[@]} -eq 0 ]]; then
+        _webhook_chunks_add '_None_'
+    else
+        for name in "${g_operators[@]}"; do
+            (( ${#name} > max_name_length )) && max_name_length=${#name}
+        done
+        for name in "${g_operators[@]}"; do
+            _check_marks "$name"
+            if [[ -n "$g_catalog_image" ]]; then
+                if [[ "$g_mark_plcc" == "OK" && "$g_mark_catalog" == "OK" ]]; then
+                    marker="✅"
+                else
+                    marker="  "
+                fi
+                printf -v line "%s  %-${max_name_length}s  PLCC: %-9s  Catalog: %s" \
+                    "$marker" "$name" "$g_mark_plcc" "$g_mark_catalog"
+            else
+                printf -v line "%-${max_name_length}s  PLCC: %s" "$name" "$g_mark_plcc"
+            fi
+            _webhook_chunks_add "$line"
+        done
+    fi
+    _webhook_chunks_finish
+}
+
+# Renders the payload from pre-built Markdown chunks and scalar result counts.
+_render_webhook_payload() {
+    local heading="$1" run_url="$2" ready_file="$3" operators_file="$4" payload_file="$5"
+    local total=${#g_operators[@]}
+    local missing_count=${#g_results_missing[@]}
+    local duplicated_count=${#g_results_duplicated[@]}
+    local issues_count=${#g_results_withissues[@]}
+    local notincatalog_count=${#g_results_notincatalog[@]}
+
+    jq -n \
+        --arg heading "$heading" \
+        --arg url "$run_url" \
+        --arg scope "$([[ -n "$g_operators_file" ]] && echo 'Selected operators' || echo 'All operators')" \
+        --argjson total "$total" \
+        --argjson plcc_ok "$((total - missing_count - duplicated_count - issues_count))" \
+        --argjson plcc_duplicate "$duplicated_count" \
+        --argjson plcc_invalid "$issues_count" \
+        --argjson plcc_missing "$missing_count" \
+        --argjson catalog_ok "$((total - notincatalog_count))" \
+        --argjson catalog_missing "$notincatalog_count" \
+        --argjson fully_done "${#g_results_allpassed[@]}" \
+        --argjson has_catalog "$([[ -n "$g_catalog_image" ]] && echo true || echo false)" \
+        --argjson show_summary "$(_webhook_has_section summary && echo true || echo false)" \
+        --argjson show_list "$(_webhook_has_section list && echo true || echo false)" \
+        --rawfile ready "$ready_file" \
+        --rawfile operators "$operators_file" '
+        def markdown_blocks($content):
+          $content | split("\u001e") | map(select(length > 0) | {type: "section", text: {type: "mrkdwn", text: .}});
+        def code_blocks($content):
+          $content | split("\u001e") | map(select(length > 0) | {type: "section", text: {type: "mrkdwn", text: ("```\n" + . + "\n```")}});
+        def status($label; $count):
+          "• " + $label + ": \($count) / \($total)";
+        def summary_markdown:
+          ((if $has_catalog then ["*Ready in PLCC and catalog: \($fully_done) / \($total)*"] else [] end) + [
+            "• Scope: \($scope)",
+            "• Operators assessed: \($total)",
+            status("PLCC valid"; $plcc_ok),
+            status("PLCC duplicate"; $plcc_duplicate),
+            status("PLCC invalid"; $plcc_invalid),
+            status("PLCC missing"; $plcc_missing)
+          ] + (if $has_catalog then [status("Catalog present"; $catalog_ok), status("Catalog missing"; $catalog_missing)] else [] end)) | join("\n");
+        {
+          text: ($heading + ". " + $url),
+          blocks: (
+            [{type: "header", text: {type: "plain_text", text: $heading}}]
+            + (if $show_summary then
+                [{type: "section", text: {type: "mrkdwn", text: ("*Summary*\n" + summary_markdown)}}]
+                + (if $has_catalog then [{type: "section", text: {type: "mrkdwn", text: "*Operators ready in PLCC and catalog*"}}] + markdown_blocks($ready) else [] end)
+              else [] end)
+            + (if $show_list then [{type: "section", text: {type: "mrkdwn", text: "*Requested operators*"}}] + code_blocks($operators) else [] end)
+            + [{type: "section", text: {type: "mrkdwn", text: ("<" + $url + "|Open workflow run and download artifacts>")}}]
+          )
+        }' > "$payload_file"
+}
+
+# Writes a complete, non-secret Slack webhook payload. The GitHub Actions
+# workflow owns the webhook URL and posts this file unchanged.
+write_webhook_payload() {
+    [[ -n "$g_webhook_sections" ]] || return 0
+
+    local server_url="${GITHUB_SERVER_URL:-}"
+    local repository="${GITHUB_REPOSITORY:-}"
+    local run_id="${GITHUB_RUN_ID:-}"
+    if [[ -z "$server_url" || -z "$repository" || -z "$run_id" ]]; then
+        log_error "--webhook requires GITHUB_SERVER_URL, GITHUB_REPOSITORY, and GITHUB_RUN_ID"
+        exit 1
+    fi
+
+    local heading="Operator lifecycle assessment"
+    [[ -n "$g_operators_file" ]] && heading+=" ($(basename "$g_operators_file"))"
+    local ready_file="$WORK_DIR/webhook-ready.txt"
+    local operators_file="$WORK_DIR/webhook-operators.txt"
+    _write_ready_operator_chunks "$ready_file"
+    _write_requested_operator_chunks "$operators_file"
+    _render_webhook_payload "$heading" \
+        "${server_url}/${repository}/actions/runs/${run_id}" \
+        "$ready_file" "$operators_file" "$g_outdir/slack-payload.json"
+}
+
 main() {
     WORK_DIR="$(mktemp -d)"
     FILE_FBC="$WORK_DIR/fbc.yaml"
@@ -529,6 +708,7 @@ main() {
     print_csv_lists
 
     copy_output_files
+    write_webhook_payload
 }
 
 main "$@"

@@ -51,6 +51,14 @@ func runPlccCheck(t *testing.T, args ...string) (stdout, stderr []byte, exitCode
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", append([]string{plccCheckScript}, args...)...)
+	// --webhook derives the workflow link from the standard GitHub
+	// Actions environment. Supplying stable values also keeps payload tests
+	// independent of the environment that runs them.
+	cmd.Env = append(os.Environ(),
+		"GITHUB_SERVER_URL=https://github.example.test",
+		"GITHUB_REPOSITORY=release-engineering/fbc-update-planner",
+		"GITHUB_RUN_ID=12345",
+	)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -244,6 +252,130 @@ func TestPlccCheckCatalogEmptyPackageName(t *testing.T) {
 	)
 	if exitCode != 0 {
 		t.Fatalf("exit code %d; stderr:\n%s", exitCode, stderr)
+	}
+}
+
+// TestPlccCheckWebhook verifies that the script, rather than the workflow,
+// constructs the requested Slack payload sections from its collected results.
+func TestPlccCheckWebhook(t *testing.T) {
+	const runURL = "https://github.example.test/release-engineering/fbc-update-planner/actions/runs/12345"
+
+	for _, tc := range []struct {
+		name        string
+		sections    string
+		catalog     bool
+		wantSummary bool
+		wantList    bool
+	}{
+		{name: "list only", sections: "list", wantList: true},
+		{name: "summary and list with catalog", sections: "summary,list", catalog: true, wantSummary: true, wantList: true},
+		{name: "summary only with catalog", sections: "summary", catalog: true, wantSummary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outDir := t.TempDir()
+			args := []string{
+				"--webhook", tc.sections,
+				"--validators", "syntax,catalog",
+				"-i", "testdata/plcc.json",
+				"-o", outDir,
+			}
+			if tc.catalog {
+				args = append(args, "--catalog-image", "testdata/catalog-fbc")
+			}
+			args = append(args, "testdata/plcc-check-operators.txt")
+			_, stderr, exitCode := runPlccCheck(t, args...)
+			if exitCode != 0 {
+				t.Fatalf("exit code %d; stderr:\n%s", exitCode, stderr)
+			}
+
+			data, err := os.ReadFile(filepath.Join(outDir, "slack-payload.json"))
+			if err != nil {
+				t.Fatalf("reading slack payload: %v", err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatalf("payload is not valid JSON: %v", err)
+			}
+			title := "Operator lifecycle assessment (plcc-check-operators.txt)"
+			if got, want := payload["text"], title+". "+runURL; got != want {
+				t.Errorf("payload text = %q, want %q", got, want)
+			}
+
+			blocks, ok := payload["blocks"].([]any)
+			if !ok {
+				t.Fatalf("payload blocks = %#v, want array", payload["blocks"])
+			}
+			var summary, operators string
+			for _, block := range blocks {
+				candidate, ok := block.(map[string]any)
+				if !ok {
+					continue
+				}
+				if candidate["type"] == "section" {
+					if text, ok := candidate["text"].(map[string]any); ok {
+						if value, ok := text["text"].(string); ok {
+							if strings.HasPrefix(value, "*Summary*\n") {
+								summary = value
+							}
+							if strings.Contains(value, "aws-efs-csi-driver-operator") && strings.Contains(value, "PLCC:") {
+								operators += value
+							}
+						}
+					}
+				}
+			}
+			if got := summary != ""; got != tc.wantSummary {
+				t.Errorf("payload has summary = %t, want %t", got, tc.wantSummary)
+			}
+			if got := operators != ""; got != tc.wantList {
+				t.Errorf("payload has operator list = %t, want %t", got, tc.wantList)
+			}
+			if tc.wantSummary && (!strings.Contains(summary, "• Scope:") || !strings.Contains(summary, "• Operators assessed:")) {
+				t.Errorf("summary is missing scope or assessed count: %q", summary)
+			}
+			if tc.catalog && tc.wantSummary && !strings.Contains(summary, "*Ready in PLCC and catalog:") {
+				t.Errorf("summary is missing the highlighted ready result: %q", summary)
+			}
+			if !tc.wantList {
+				if tc.wantSummary && tc.catalog && !strings.Contains(string(data), "Operators ready in PLCC and catalog") {
+					t.Error("summary-only catalog payload is missing the ready operator list")
+				}
+			}
+			if !strings.Contains(string(data), "Open workflow run and download artifacts") {
+				t.Error("payload is missing workflow artifact link")
+			}
+			if tc.wantList && (!strings.HasPrefix(operators, "```\n") || !strings.HasSuffix(operators, "\n```")) {
+				t.Error("operator list must be a monospaced Markdown block")
+			}
+			if tc.wantList && strings.Contains(operators, " — ") {
+				t.Error("operator list must not contain dash separators")
+			}
+			if tc.catalog && tc.wantList && !strings.Contains(operators, "PLCC: OK         Catalog: OK") {
+				t.Errorf("operator list has unaligned status columns: %q", operators)
+			}
+			if tc.catalog && tc.wantList && !strings.Contains(operators, "✅  aws-efs-csi-driver-operator") {
+				t.Errorf("operator list does not highlight fully successful operators: %q", operators)
+			}
+			if tc.catalog && tc.wantList && strings.Count(operators, "✅") != 1 {
+				t.Errorf("operator list contains %d success markers, want 1", strings.Count(operators, "✅"))
+			}
+			if strings.Contains(string(data), "CSV operator lists") {
+				t.Error("payload must not include CSV operator lists")
+			}
+			if strings.Contains(string(data), `"type": "table"`) {
+				t.Error("payload must use Markdown instead of Block Kit tables")
+			}
+		})
+	}
+}
+
+func TestPlccCheckWebhookRejectsUnknownSection(t *testing.T) {
+	_, stderr, exitCode := runPlccCheck(t, "--webhook", "summary,details")
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr:\n%s", exitCode, stderr)
+	}
+	if !strings.Contains(string(stderr), "unsupported webhook section: details") {
+		t.Errorf("stderr = %q, want unsupported-section error", stderr)
 	}
 }
 

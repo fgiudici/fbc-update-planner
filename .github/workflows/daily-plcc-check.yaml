@@ -1,0 +1,103 @@
+name: Daily operator lifecycle assessment
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-plcc-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install opm
+        env:
+          OPM_VERSION: v1.74.0
+          OPM_SHA256: cf1bd699be72e0a4511208afdf45444fc47d21eb2ffed0c204520ff50b5a4691
+        run: |
+          curl -sSfL -o /tmp/opm \
+            "https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-amd64-opm"
+          echo "${OPM_SHA256}  /tmp/opm" | sha256sum -c -
+          chmod +x /tmp/opm
+          sudo install /tmp/opm /usr/local/bin/opm
+
+      - name: Log in to registry.redhat.io
+        env:
+          RH_REGISTRY_USER: ${{ secrets.RH_REGISTRY_USER }}
+          RH_REGISTRY_TOKEN: ${{ secrets.RH_REGISTRY_TOKEN }}
+          DOCKER_CONFIG: ${{ runner.temp }}/registry-auth
+        run: printf '%s' "$RH_REGISTRY_TOKEN" | docker login registry.redhat.io --username "$RH_REGISTRY_USER" --password-stdin
+
+      - name: Run PLCC check
+        id: check
+        continue-on-error: true
+        env:
+          RUN_OUTPUT: ${{ runner.temp }}/plcc-check-all-${{ github.run_id }}
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/registry-auth/config.json
+        run: |
+          mkdir -p "$RUN_OUTPUT"
+          scripts/plcc-check.sh --webhook summary,list --validators syntax,catalog \
+            --catalog-image registry.redhat.io/redhat/redhat-operator-index:v5.0 \
+            -o "$RUN_OUTPUT"
+
+      - name: Upload PLCC check artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: daily-plcc-check-all-${{ github.run_id }}
+          path: ${{ runner.temp }}/plcc-check-all-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Post report to Slack
+        id: notify
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          RUN_OUTPUT: ${{ runner.temp }}/plcc-check-all-${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo "SLACK_WEBHOOK_URL is not configured" >&2
+            exit 1
+          fi
+
+          if [[ -f "$RUN_OUTPUT/slack-payload.json" ]]; then
+            curl --fail-with-body --silent --show-error \
+              --write-out '\nSlack HTTP status: %{http_code}\n' \
+              -H 'Content-type: application/json; charset=utf-8' \
+              --data @"$RUN_OUTPUT/slack-payload.json" \
+              "$SLACK_WEBHOOK_URL"
+          else
+            payload="$(jq -n --arg url "$RUN_URL" '{
+              text: ("Operator lifecycle assessment failed. " + $url),
+              blocks: [
+                {type: "header", text: {type: "plain_text", text: "Operator lifecycle assessment failed"}},
+                {type: "section", text: {type: "mrkdwn", text: ("The assessment did not produce a report. <" + $url + "|Open the workflow run and download artifacts>.")}}
+              ]
+            }')"
+            curl --fail-with-body --silent --show-error \
+              --write-out '\nSlack HTTP status: %{http_code}\n' \
+              -H 'Content-type: application/json; charset=utf-8' \
+              --data "$payload" \
+              "$SLACK_WEBHOOK_URL"
+          fi
+
+      - name: Set final workflow status
+        if: ${{ always() && (steps.check.outcome != 'success' || steps.notify.outcome != 'success') }}
+        run: exit 1
