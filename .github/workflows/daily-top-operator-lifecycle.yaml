@@ -1,8 +1,6 @@
 name: Daily top operator lifecycle assessment
 
 on:
-  schedule:
-    - cron: "15 8 * * *"
   workflow_dispatch:
 
 permissions:
