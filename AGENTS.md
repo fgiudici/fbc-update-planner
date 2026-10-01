@@ -17,6 +17,10 @@
 cmd/plcc2fbc/main.go          CLI entry point — flag parsing, orchestration
 cmd/plcc2fbc/version.go       Version/commit variables injected via ldflags
 cmd/plcc2fbc/main_test.go     Tests for CLI (run function)
+pkg/catalog/catalog.go       Catalog coverage inventory and rendered JSON stream parsing
+pkg/catalog/render.go        Context-aware opm render adapter for images and local catalogs
+pkg/catalog/catalog_test.go  Tests for catalog parsing and metadata errors
+pkg/catalog/render_test.go   Offline subprocess tests using a fake opm
 pkg/plcc/plcc.go              Dataset API — source snapshot, working catalog, validation, filtering
 pkg/plcc/catalog.go           PLCC data types, catalog operations, selection and copy helpers
 pkg/plcc/client.go            PLCC API fetching, retries, and local JSON loading
@@ -43,6 +47,7 @@ pkg/fbc/testdata/             Test fixtures (plcc.json, reference-fbc.yaml, etc.
 pkg/report/result.go          Shared ValidationResult type + JSON-lines log writer
 test/e2e/e2e_test.go          End-to-end tests — build binary, run against fixture, compare output
 test/e2e/plcc_check_test.go   End-to-end tests for scripts/plcc-check.sh against fixture, compare output
+test/e2e/catalog_test.go      Catalog reader integration tests using opm and local fixtures
 test/e2e/testdata/            E2e test fixtures (plcc.json, reference YAMLs, untranslatable.json, plcc-check/)
 docs/VALIDATION_RULES.md      Filter pipeline spec (read before touching filters)
 docs/PLCC_API.md              Dataset API, ownership, validation, and compatibility
@@ -94,6 +99,18 @@ plcc2fbc [flags] <output-path>
 ```
 
 ## Architecture
+
+### Catalog ingestion
+
+`catalog.Parse(io.Reader)` reads an existing rendered JSON stream without an
+external binary. `catalog.Render(context.Context, reference)` invokes `opm render`
+and uses the same parser, inheriting registry authentication from the environment.
+Both return a caller-owned `catalog.Inventory` keyed by package name, containing
+bundle identities and original versions, lifecycle entry presence, and lifecycle
+version names. Other schemas and unused fields are ignored. Consumed metadata
+errors discard the entire inventory; lifecycle records without a package name are
+ignored for compatibility. Version syntax checks, MAJOR.MINOR normalization,
+deduplication, and PLCC comparison belong to callers.
 
 ### Data Flow
 
