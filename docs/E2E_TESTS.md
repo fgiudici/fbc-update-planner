@@ -14,6 +14,12 @@ The e2e package uses a `//go:build e2e` build tag so that `go test ./...` (i.e. 
 
 `make e2e` requires `opm` in `PATH` — `TestPlccCheckCatalogPresence` exercises `scripts/plcc-check.sh --catalog-image` by pointing `opm render` at a local FBC directory fixture (`testdata/catalog-fbc/`), which needs no registry or network access.
 
+`test/e2e/catalog_test.go` also tests the Go `catalog.Render` API with real `opm`
+and local catalog fixtures. It verifies bundle identities and original versions,
+lifecycle presence and versions, and compatibility with empty lifecycle package
+names. These tests make no registry or PLCC requests. Parser and subprocess error
+tests live in `pkg/catalog` and run with `make test` without an installed `opm`.
+
 This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API level) and `cmd/plcc2fbc/main_test.go` (unit tests for the `run()` function). The e2e suite is the only layer that verifies exit code semantics and the full binary's file I/O behavior.
 
 ---
