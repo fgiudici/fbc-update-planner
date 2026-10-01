@@ -66,10 +66,8 @@ docs/FBC_SCHEMA.md            FBC output schema reference
 docs/E2E_TESTS.md             E2e test architecture, test matrix, golden file workflow
 docs/RELEASING.md             Release process and version injection reference
 schema-examples/              Example PLCC + FBC schemas for reference
-scripts/plcc-check.sh         Batch runner — runs plcc2fbc against an operator list (or the full PLCC dataset if
-                               none given), optionally checks catalog presence and per-version bundle coverage via
-                               --catalog-image/opm (reports OK/X/Y/MISSING), and writes summary.txt, validation.jsonl,
-                               slog.json, and the FBC/PLCC dump to an output directory
+scripts/plcc-check-all.yaml   All-operator reporting configuration and skip groups
+scripts/plcc-check-top.yaml   Top-operator selection and skip groups
 scripts/top-operators         Legacy plain-text operator selection
 .goreleaser.yaml              GoReleaser config for cross-platform binary builds
 .github/workflows/tests.yaml  CI workflow — runs tests + lint on PRs to main
@@ -160,7 +158,13 @@ The text report includes the complete four CSV lists;
 Slack uses larger, bold headers for Summary, Table, List, and Details.
 The assessment retains filtered PLCC and translated FBC
 for artifacts from the same pass. `cmd/plcc-check` orchestrates loading and
-artifact writing; renderers share a `plcccheck.Report`. The `table` section has one row per operator; `list` has CSV names grouped by action.
+artifact writing; renderers share a `plcccheck.Report`. Both daily workflows build
+and invoke `bin/plcc-check` directly, requesting Slack summary, table, and list.
+Each workflow uses a separate YAML `--config` with optional `selected` names and
+`skipped` groups (required `reason` and `operators`). Omitted selection means all;
+empty selection is invalid. Skip rules never expand the assessed set. The legacy
+positional operator-list file remains supported, mutually exclusive with `--config`.
+The `table` section has one row per operator; `list` has CSV names grouped by action.
 See `docs/PLCC_CHECK.md` for command flags and artifact semantics.
 
 The existing `plcc2fbc` CLI still follows this legacy flow:
