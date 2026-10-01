@@ -17,6 +17,10 @@
 cmd/plcc2fbc/main.go          CLI entry point — flag parsing, orchestration
 cmd/plcc2fbc/version.go       Version/commit variables injected via ldflags
 cmd/plcc2fbc/main_test.go     Tests for CLI (run function)
+internal/plcccheck/check.go  Reporting assessment model and lifecycle gap classification
+internal/plcccheck/versions.go  Catalog version normalization and coverage
+internal/plcccheck/skip.go    Reporting exceptions that preserve assessment evidence
+internal/plcccheck/testdata/ Offline PLCC and rendered catalog assessment fixtures
 pkg/catalog/catalog.go       Catalog coverage inventory and rendered JSON stream parsing
 pkg/catalog/render.go        Context-aware opm render adapter for images and local catalogs
 pkg/catalog/catalog_test.go  Tests for catalog parsing and metadata errors
@@ -51,6 +55,7 @@ test/e2e/catalog_test.go      Catalog reader integration tests using opm and loc
 test/e2e/testdata/            E2e test fixtures (plcc.json, reference YAMLs, untranslatable.json, plcc-check/)
 docs/VALIDATION_RULES.md      Filter pipeline spec (read before touching filters)
 docs/PLCC_API.md              Dataset API, ownership, validation, and compatibility
+docs/PLCC_CHECK.md            Assessment API, evidence, coverage, and action policy
 docs/FBC_SCHEMA.md            FBC output schema reference
 docs/E2E_TESTS.md             E2e test architecture, test matrix, golden file workflow
 docs/RELEASING.md             Release process and version injection reference
