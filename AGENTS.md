@@ -17,9 +17,16 @@
 cmd/plcc2fbc/main.go          CLI entry point — flag parsing, orchestration
 cmd/plcc2fbc/version.go       Version/commit variables injected via ldflags
 cmd/plcc2fbc/main_test.go     Tests for CLI (run function)
-pkg/plcc/plcc.go              PLCC API client, data types, filtering, sorting
+pkg/plcc/plcc.go              Dataset API — source snapshot, working catalog, validation, filtering
+pkg/plcc/catalog.go           PLCC data types, catalog operations, selection and copy helpers
+pkg/plcc/client.go            PLCC API fetching, retries, and local JSON loading
+pkg/plcc/findings.go          Structured validator metadata and per-product findings
+pkg/plcc/legacy.go            Compatibility API for former selection and validation methods
 pkg/plcc/validation.go        PLCC validator registry — per-product and catalog-level checks
-pkg/plcc/plcc_test.go         Tests for PLCC package
+pkg/plcc/plcc_test.go         Tests for the Dataset API
+pkg/plcc/catalog_test.go      Tests for catalog types and operations
+pkg/plcc/client_test.go       Tests for fetching and retries
+pkg/plcc/legacy_test.go       Tests for legacy API compatibility
 pkg/plcc/validation_test.go   Tests for PLCC validators
 pkg/fbc/doc.go                Package documentation
 pkg/fbc/types.go              Structured FBC types: MajorMinor, Date
@@ -38,6 +45,7 @@ test/e2e/e2e_test.go          End-to-end tests — build binary, run against fix
 test/e2e/plcc_check_test.go   End-to-end tests for scripts/plcc-check.sh against fixture, compare output
 test/e2e/testdata/            E2e test fixtures (plcc.json, reference YAMLs, untranslatable.json, plcc-check/)
 docs/VALIDATION_RULES.md      Filter pipeline spec (read before touching filters)
+docs/PLCC_API.md              Dataset API, ownership, validation, and compatibility
 docs/FBC_SCHEMA.md            FBC output schema reference
 docs/E2E_TESTS.md             E2e test architecture, test matrix, golden file workflow
 docs/RELEASING.md             Release process and version injection reference
