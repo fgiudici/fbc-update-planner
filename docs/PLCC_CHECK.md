@@ -3,12 +3,18 @@
 `internal/plcccheck` owns the reporting policy for task A in issue #93. It joins
 the source-preserving PLCC Dataset API with the catalog inventory and existing
 FBC translation pipeline. `cmd/plcc-check` loads inputs and writes artifacts;
-text, JSON, and Slack reports share the same assessment. `plcc2fbc` remains the conversion CLI.
+text, JSON, and Slack reports share the same assessment. The daily workflows
+build and invoke this command directly. It replaces `scripts/plcc-check.sh`;
+`plcc2fbc` remains the conversion CLI.
 
 ## Reporting command
 
 ```sh
 make plcc-check
+bin/plcc-check --validators syntax,catalog \
+  --catalog-image registry.redhat.io/redhat/redhat-operator-index:v5.0 \
+  --config scripts/plcc-check-top.yaml -o report
+
 # Fully offline, with a previously rendered JSON stream:
 bin/plcc-check -i internal/plcccheck/testdata/plcc.json \
   --catalog-input internal/plcccheck/testdata/catalog.json \
@@ -215,6 +221,25 @@ and [3000-character section limit](https://docs.slack.dev/reference/block-kit/bl
 with the same 3000-character cap for preformatted blocks and an additional
 35,000-character budget shared by all sections. Large tables and lists can leave details
 available only in the linked artifacts.
+
+## Daily workflows
+
+The all-operator and top-operator workflows build the reporter with
+`make plcc-check`, then run `bin/plcc-check --webhook summary,table,list
+--validators syntax,catalog --catalog-image
+registry.redhat.io/redhat/redhat-operator-index:v5.0 -o "$RUN_OUTPUT"`.
+Each passes its own `--config`: `scripts/plcc-check-all.yaml` or
+`scripts/plcc-check-top.yaml`. The former omits `selected`; the latter contains
+the top-operator selection. Maintain skip groups independently in these files.
+Both contain skip groups for `non-fbc operator` and `ocp art operator` exceptions.
+`scripts/top-operators` remains available to legacy local callers.
+
+Both workflows install `opm`, authenticate to the registry, and use a fresh
+artifact directory for each run. The command creates the Slack payload; the
+workflow uploads the report artifacts and posts the payload. Execution or build
+failures use the workflow's fallback notification and fail the workflow. Report
+findings alone do not fail it. The shell reporting script has been removed;
+local callers should build and invoke `bin/plcc-check` too.
 
 ## Entry point
 
