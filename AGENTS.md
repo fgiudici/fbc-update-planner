@@ -17,9 +17,14 @@
 cmd/plcc2fbc/main.go          CLI entry point — flag parsing, orchestration
 cmd/plcc2fbc/version.go       Version/commit variables injected via ldflags
 cmd/plcc2fbc/main_test.go     Tests for CLI (run function)
+cmd/plcc-check/main.go       Reporting CLI — input loading and assessment orchestration
+cmd/plcc-check/config.go     YAML selection and grouped skip-policy loading
+cmd/plcc-check/artifacts.go  Staged artifact writing and publication
 internal/plcccheck/check.go  Reporting assessment model and lifecycle gap classification
 internal/plcccheck/versions.go  Catalog version normalization and coverage
 internal/plcccheck/skip.go    Reporting exceptions that preserve assessment evidence
+internal/plcccheck/report.go  Summary counts and complete text report
+internal/plcccheck/slack.go   Bounded Slack payload generation (no posting)
 internal/plcccheck/testdata/ Offline PLCC and rendered catalog assessment fixtures
 pkg/catalog/catalog.go       Catalog coverage inventory and rendered JSON stream parsing
 pkg/catalog/render.go        Context-aware opm render adapter for images and local catalogs
@@ -50,7 +55,8 @@ pkg/fbc/pipeline_test.go      Integration test — full pipeline vs reference ou
 pkg/fbc/testdata/             Test fixtures (plcc.json, reference-fbc.yaml, etc.)
 pkg/report/result.go          Shared ValidationResult type + JSON-lines log writer
 test/e2e/e2e_test.go          End-to-end tests — build binary, run against fixture, compare output
-test/e2e/plcc_check_test.go   End-to-end tests for scripts/plcc-check.sh against fixture, compare output
+test/e2e/plcc_check_test.go   Reporting CLI tests — selection, catalog coverage, Slack, and artifacts
+test/e2e/plcc_check_command_test.go  Reporting command subprocess tests and real opm input parity
 test/e2e/catalog_test.go      Catalog reader integration tests using opm and local fixtures
 test/e2e/testdata/            E2e test fixtures (plcc.json, reference YAMLs, untranslatable.json, plcc-check/)
 docs/VALIDATION_RULES.md      Filter pipeline spec (read before touching filters)
@@ -64,7 +70,7 @@ scripts/plcc-check.sh         Batch runner — runs plcc2fbc against an operator
                                none given), optionally checks catalog presence and per-version bundle coverage via
                                --catalog-image/opm (reports OK/X/Y/MISSING), and writes summary.txt, validation.jsonl,
                                slog.json, and the FBC/PLCC dump to an output directory
-scripts/top-operators         Example operator list for plcc-check.sh
+scripts/top-operators         Legacy plain-text operator selection
 .goreleaser.yaml              GoReleaser config for cross-platform binary builds
 .github/workflows/tests.yaml  CI workflow — runs tests + lint on PRs to main
 .github/workflows/release.yaml  Release workflow — runs GoReleaser on v* tag push
@@ -74,11 +80,12 @@ scripts/top-operators         Example operator list for plcc-check.sh
 
 ```sh
 make build              # → bin/plcc2fbc
+make plcc-check         # → bin/plcc-check (PLCC and catalog reporting)
 make test               # go test -v -count 1 ./...
 make e2e                # go test -v -count 1 ./test/e2e/
 make update-e2e         # regenerate e2e reference files from existing testdata/plcc.json
 make update-e2e-source  # fetch fresh plcc.json from PLCC API + regenerate references
-make update-e2e-plcc-check  # regenerate plcc-check.sh e2e golden files from existing testdata/plcc.json
+make update-e2e-plcc-check  # regenerate reporting golden files from local PLCC/catalog fixtures
 make generate-fbc       # build + run against live PLCC API, write YAML + logs to fbc-samples/
 ```
 
@@ -115,9 +122,48 @@ bundle identities and original versions, lifecycle entry presence, and lifecycle
 version names. Other schemas and unused fields are ignored. Consumed metadata
 errors discard the entire inventory; lifecycle records without a package name are
 ignored for compatibility. Version syntax checks, MAJOR.MINOR normalization,
-deduplication, and PLCC comparison belong to callers.
+deduplication, and PLCC comparison belong to callers. The reporting command uses
+this package for catalog inspection.
 
 ### Data Flow
+
+`internal/plcccheck.Assess` combines one PLCC source snapshot with an optional
+catalog inventory to produce report facts and actions. It uses the Dataset's
+selected validators and whole-product FBC translation with default filters.
+Failures retain source identity. Typed issues track missing PLCC and catalog
+content separately from the operator action: PLCC add, PLCC fix, OPERATOR add,
+OPERATOR build, or OK. PLCC actions take precedence over catalog actions; no
+bundles means OPERATOR add even if lifecycle data is present. Text and Slack's ACTION
+column shows 📋 PLCCDATA, 📦 OPERATOR, or ✅. After assessment, `ApplySkips` can
+replace recommendations with SKIPPED and attach a reason, preserving all evidence
+and pipeline artifacts. Both tables show ➖ alone for skipped ACTION cells.
+The SKIPPED table column contains the note. CSV lists group operators
+under ✅ OK, 📋 PLCCDATA, 📦 OPERATOR, and ➖ SKIPPED; JSON retains all action labels.
+PLCC status precedence is MISSING, DUPLICATE, INVALID, REGRESSED, INCOMPLETE, OK.
+Text and Slack tables render INCOMPLETE as X/Y: required versions present in
+source PLCC / distinct bundle MAJOR.MINOR versions, sharing the catalog denominator.
+Summary counts and JSON use INCOMPLETE (`incomplete`) for both PLCC and catalog
+version gaps.
+Completeness checks all bundle versions; regression checks all shipped lifecycle
+versions, including those without bundles. Catalog status is NO BUNDLES, MISSING,
+OK, or X/Y. Summaries count operators by status and show one row per
+operator (Action | Operator | PLCC | Catalog | Skipped); details group failure reasons
+and issues by package, showing only the skip note for skipped operators.
+Status counts and READY exclude skipped operators. Both summaries identify the
+supplied catalog image or rendered input file, followed by a blank line, total
+operators, skipped operators with an inline exclusion note, then READY as
+fullyOK/nonSkipped before status counts. READY is a bold Slack header, omitted
+without a catalog check, and displays 0/0 when no non-skipped operators remain.
+JSON retains the fullyOK and nonSkipped fields. List headings explain each action group and show its count
+over the total assessed operators, including any names omitted from Slack.
+The text report includes the complete four CSV lists;
+Slack uses larger, bold headers for Summary, Table, List, and Details.
+The assessment retains filtered PLCC and translated FBC
+for artifacts from the same pass. `cmd/plcc-check` orchestrates loading and
+artifact writing; renderers share a `plcccheck.Report`. The `table` section has one row per operator; `list` has CSV names grouped by action.
+See `docs/PLCC_CHECK.md` for command flags and artifact semantics.
+
+The existing `plcc2fbc` CLI still follows this legacy flow:
 
 ```
 PLCC API (or -i file) → plcc.Fetch()/Load()

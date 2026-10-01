@@ -1,5 +1,221 @@
 # PLCC and catalog assessment
 
+`internal/plcccheck` owns the reporting policy for task A in issue #93. It joins
+the source-preserving PLCC Dataset API with the catalog inventory and existing
+FBC translation pipeline. `cmd/plcc-check` loads inputs and writes artifacts;
+text, JSON, and Slack reports share the same assessment. `plcc2fbc` remains the conversion CLI.
+
+## Reporting command
+
+```sh
+make plcc-check
+# Fully offline, with a previously rendered JSON stream:
+bin/plcc-check -i internal/plcccheck/testdata/plcc.json \
+  --catalog-input internal/plcccheck/testdata/catalog.json \
+  --validators syntax,catalog -o report
+```
+
+Usage: `plcc-check [flags] [operators-file]`. Without a file or config selection,
+assess the union of all named PLCC products and catalog packages. Operator files accept blank
+lines, comments (including inline `#`), surrounding whitespace, and duplicates;
+first-seen order is preserved. An empty file is an error.
+
+| Flag | Purpose |
+| --- | --- |
+| `-o, --output DIR` | Artifact directory, created if needed; default `.` |
+| `-i, --input FILE` | Local PLCC JSON instead of one API fetch |
+| `--config FILE` | YAML operator selection and skip groups; mutually exclusive with the positional operators file |
+| `--validators CSV` | PLCC rule labels/groups; default `all` |
+| `--catalog-image REF` | Image or local directory rendered by `opm` |
+| `--catalog-input FILE` | Rendered catalog JSON; mutually exclusive with `--catalog-image` |
+| `--plcc` | Save filtered PLCC instead of FBC output |
+| `--webhook CSV` | Generate Slack sections: `summary`, `table`, `list`, `details` |
+| `-h, --help` | Print usage |
+
+### Operator configuration
+
+Use `--config FILE` for one YAML document containing selection and grouped
+reporting exceptions:
+
+```yaml
+# Omit selected to assess all PLCC/catalog operators.
+selected:
+  - cluster-logging
+  - openshift-gitops-operator
+
+skipped:
+  - reason: "Explanation shared by this group"
+    operators:
+      - example-operator
+      - another-example-operator
+```
+
+Each skip group requires a nonempty reason and operator list. Use a group with
+one operator for an individual note. Names match exact package names; patterns
+are not supported. Skip entries apply only to the assessed selection and never
+add rows. Entries outside the selection or absent from both sources are ignored.
+
+Omitting `selected` means all operators; an explicit empty or null selection is
+an error. Selection preserves first-seen order and removes duplicates. Names and
+reasons have surrounding whitespace removed. Unknown fields, duplicate YAML
+keys, blank names/reasons, and repeated operators within or across skip groups
+are errors. Configuration is validated before loading PLCC or rendering a catalog.
+An empty mapping (`{}`) is valid and selects all operators without skips.
+
+The existing positional operator-list file remains supported, but cannot be
+combined with `--config`. Without either input, all operators are assessed.
+
+Skipped operators still undergo all PLCC, FBC translation, and catalog checks.
+Their action becomes `SKIPPED` and JSON includes `skipReason`, while every status,
+failure, issue, and coverage value is retained. Skipping does not suppress fatal
+input/assessment errors or change validation logs and generated PLCC/FBC artifacts.
+Human-readable Details show only the skip note for these operators.
+
+JSON summary fields `total`, `nonSkipped`, and `skipped` describe the assessed
+set. PLCC/catalog status counts and `fullyOK` exclude skipped operators. All four
+CSV groups use the total assessed count as their denominator and partition the
+full selection. The summary explicitly labels status counts as excluding skips.
+
+Findings, missing requested operators, and zero translatable products **exit 0**:
+they are report results. Argument, input, catalog parsing/rendering, assessment,
+and output failures **exit 1**. This command does not implement task B's build
+gate or permissive policy.
+
+Ctrl+C cancels in-flight PLCC HTTP requests, response reads, and retry delays,
+as well as catalog rendering. Cancellation exits 1 and removes the Slack payload
+so a failed run cannot expose a stale success notification.
+
+`--plcc` controls the saved artifact only. Assessment always includes mandatory
+FBC conversion and filtering, so untranslatable PLCC cannot receive `OK`. This
+differs from the old script's validation-only `--plcc` mode. Its PLCC dump still
+contains products that passed the selected PLCC validators, preserving aliases
+and product shape even when subsequent FBC conversion rejects them.
+
+### Artifacts
+
+| File | Contents |
+| --- | --- |
+| `summary.txt` | Catalog source, complete summary/table/CSV lists/details; byte-for-byte identical to stdout |
+| `assessment.json` | Catalog source, summary counts and structured assessment with all evidence and original reasons |
+| `validation.jsonl` | Pipeline failures in `report.ValidationResult` format, per affected operator and failure; missing-content issues are in the full reports |
+| `slog.json` | JSON run log, including fatal errors after output initialization |
+| `fbc-output.yaml` | Successfully translated whole products, sorted by package |
+| `plcc-dump.json` | Filtered selected PLCC, replacing FBC output with `--plcc` |
+| `catalog-packages.txt` | All catalog packages with lifecycle entries, sorted; only when a catalog is checked |
+| `slack-payload.json` | Slack webhook JSON; only with `--webhook` |
+
+The command reserves these filenames in the output directory. It stages report
+artifacts before publishing and publishes Slack last. Each file replacement is
+atomic, but replacing the entire set is not a filesystem transaction. Once
+arguments are accepted and output initialization starts, a previous Slack
+payload is removed so a failed rerun cannot expose a stale success notification.
+Successful reruns also remove optional artifacts that no longer apply. Other
+previous artifacts may remain after a failed run; use a fresh output directory
+per workflow run and check the exit status.
+
+### Slack
+
+`--webhook summary,table,list,details` generates a payload without sending it.
+Sections are independently selectable and appear in this order:
+
+- `summary`: operator counts by status.
+- `table`: Action/Operator/PLCC/Catalog/Skipped rows.
+- `list`: CSV operator names grouped as OK, PLCCDATA (PLCC add and fix),
+  OPERATOR (operator add and build), and SKIPPED. Names retain assessment order
+  within each group.
+- `details`: findings grouped by package.
+
+Each selected Slack section starts with a larger, bold
+[header](https://docs.slack.dev/reference/block-kit/blocks/header-block/).
+These headers share the message's block and character budgets.
+
+**Selector change:** the previous `list` section is now named `table`; `list`
+now means action-grouped CSV lists. Use `--webhook summary,table` to retain the
+previous summary-and-table presentation. The text and JSON artifacts retain the
+complete assessment regardless of Slack section selection; no CSV artifact is
+added.
+
+Both the text summary and Slack's `summary` section show
+`Catalog image: <reference>` when `--catalog-image` is used, preserving the
+reference as supplied (including local directory references). With
+`--catalog-input`, the label is `Catalog input: <file>`. No source line is
+shown when no catalog was supplied. The JSON report records these optional
+values as `catalogImage` or `catalogInput`.
+
+The source is followed by one blank line, then the results in this order:
+
+```text
+Catalog image: <reference>
+
+Total operators: 168
+Skipped operators: 46    (Status counts exclude skipped operators)
+READY operators: 9/122
+PLCC: ...
+Catalog: ...
+```
+
+`READY operators` counts operators with both statuses OK over the number of
+non-skipped operators. It immediately follows the skipped count and is a larger,
+bold Slack header. There is no separate non-skipped count line. A checked report
+with no non-skipped operators displays `0/0`; without a catalog check, READY is
+omitted and the existing unchecked-catalog explanation is retained. The JSON
+fields `fullyOK` and `nonSkipped` and their counting semantics are unchanged.
+
+Each list heading includes its action icon, an explanation, and the group count
+over the total number of operators in the report. For example:
+
+```text
+✅ OK - operators ready 2/8
+📋 PLCCDATA - operators that need PLCC fixes 4/8
+📦 OPERATOR - operators that need a catalog rebuild 2/8 (PLCC data ready, missing bundles or lifecycle data in the catalog)
+➖ SKIPPED - operators excluded from action reporting 0/8
+```
+
+Counts describe all assessed operators, including names omitted from Slack due
+to message limits. The denominator follows operator selection, not the size of
+the entire catalog. Names appear in a separate copyable CSV block, with commas
+and quotes escaped as CSV fields. Empty groups show `0/total` and `None`; an
+empty report uses `0/0`. Large groups split between names into independently
+valid CSV records with repeated action headings marked `(continued)`, retaining
+the full group count. Without a catalog check, the OK heading reads
+`OK - operators with PLCC data ready X/Y (catalog not checked)`.
+
+`summary.txt` also contains a `List` section between the table and details, with
+the same four CSV groups, icons, and ordering as Slack. Its
+lists are complete even when the Slack payload must omit names. This section is
+always written, including when `--webhook` is not requested.
+
+The shared text and Slack legend reads: "PLCC/Catalog X/Y: X versions available,
+Y versions required." It appears beside the table, rather than among summary counts.
+Both columns use the same **Y**: the number of distinct bundle MAJOR.MINOR
+versions required by the catalog. **X** counts those required versions present
+in source PLCC for the PLCC column, or shipped lifecycle data for CATALOG.
+Extra versions in either source do not increase X. The text report uses the same
+placement and explanation.
+
+Payload generation requires `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`, and
+`GITHUB_RUN_ID`, used to link to the workflow run and its artifacts. Operator rows
+use padded columns in Slack's
+[preformatted rich text blocks](https://docs.slack.dev/reference/block-kit/block-elements/rich-text-preformatted-element/),
+with action icons and a repeated column header in each chunk. The ACTION column
+shows 📋 PLCCDATA for either PLCC action, 📦 OPERATOR for either operator action,
+✅ alone for OK, and ➖ alone for skipped operators. The text table uses the same
+ACTION labels and icons. The SKIPPED column contains the explanation and is empty for ordinary
+rows. Grouped CSV headings are ✅ OK, 📋 PLCCDATA, 📦 OPERATOR, and ➖ SKIPPED.
+The PLCC and CATALOG columns display `OK` as ✅; text and JSON retain `OK`.
+Pipe-separated text in a `plain_text` section does not render as a table.
+Names remain literal text
+inside the preformatted block; reasons use plain text sections, so neither can
+become mentions or formatting. Control characters in names are escaped before
+CSV encoding, as in table rows. Long reports explicitly count omitted report
+lines and omitted operator names from action lists, and link to the full
+artifacts. No individual name or finding is silently shortened. The renderer respects
+Slack's [50-block message limit](https://docs.slack.dev/reference/block-kit/blocks/)
+and [3000-character section limit](https://docs.slack.dev/reference/block-kit/blocks/section-block/),
+with the same 3000-character cap for preformatted blocks and an additional
+35,000-character budget shared by all sections. Large tables and lists can leave details
+available only in the linked artifacts.
+
 ## Entry point
 
 ```go
@@ -25,6 +241,13 @@ The function performs no I/O and leaves inputs unchanged. Its result is ordinary
 caller-owned data. Errors in options or assessed catalog version syntax return
 nil, never a partial report. Missing PLCC and rejected products are assessment
 results, not execution errors.
+
+After assessment, call `assessment.ApplySkips(map[string]string)` with exact
+package names mapped to notes, then `NewReport(assessment)`. `ApplySkips` replaces
+the reporting policy, changes only actions and skip notes, and ignores names
+outside the assessed set. Passing nil clears exceptions and restores normal
+actions. Blank names or notes are errors and leave the assessment unchanged.
+The CLI expands YAML skip groups into this mapping; the Dataset API is unchanged.
 
 `Assessment.CatalogChecked` distinguishes unchecked and empty catalogs even when
 there are no selected packages. `FilteredPLCC` and `FBC` retain pipeline outputs
@@ -130,6 +353,13 @@ Each operator receives exactly one PLCC status, with this precedence:
 | `OK` | None of the above |
 
 An existing product can be `INCOMPLETE` even if all required versions are absent.
+Text and Slack tables display this status as X/Y (including 0/Y), using the
+required bundle versions present in source PLCC. The JSON classification and
+summary counts retain `INCOMPLETE`; other statuses keep their labels and precedence.
+`MISSING` is reserved for an absent package. Validation failures take precedence
+over regressions and incompleteness; all underlying findings remain in JSON and,
+for non-skipped operators, human-readable details.
+
 `Action` is used only for the operator-level recommendation:
 
 1. **PLCC add** when the package is absent from PLCC.
@@ -152,3 +382,68 @@ evidence is nil, and issues can only report an absent PLCC package. Validation
 and mandatory translation still run. Successful assessment receives action `OK`,
 which renderers must qualify as **PLCC OK; catalog not checked**. It does not
 count as fully ready in both PLCC and catalog.
+
+## Report contract
+
+The reporting command and renderers consume this model in two parts:
+
+1. **Summary:** catalog source followed by a blank line, total checked operators,
+   skipped operators with the inline exclusion note, READY operators, then counts by PLCC status (`OK`, `MISSING`,
+   `INCOMPLETE`, `INVALID`, `REGRESSED`, `DUPLICATE`), counts by catalog status
+   (`OK`, `MISSING`, `INCOMPLETE`, `NO BUNDLES`). Follow with
+   one row per operator: **Action | Operator | PLCC | Catalog | Skipped**. Counts describe
+   operators, not findings; only non-skipped rows contribute to each applicable status
+   breakdown. PLCC and catalog `X/Y` rows count as `INCOMPLETE`.
+   READY excludes skipped operators and requires a catalog check and both statuses `OK`;
+   its denominator is the non-skipped count.
+   The summary identifies the catalog source; the text report follows its table
+   with the complete OK, PLCCDATA, OPERATOR, and SKIPPED CSV lists.
+2. **Details:** all findings grouped by package. Emit one line per original
+   validation/conversion reason, retaining its rule labels, and one line per
+   typed issue, including its version when present. When the entire catalog
+   lifecycle entry is missing, text and Slack report that once and omit the
+   redundant catalog lifecycle version findings. Missing PLCC versions still
+   appear, and the JSON assessment retains all version findings. An existing
+   lifecycle entry with missing versions, including an empty entry, still gets
+   per-version details. Status precedence does not suppress details. Operators
+   with no findings need no detail section. Skipped operators always receive
+   only `[SKIPPED] <reason>` here; their findings remain in assessment JSON.
+
+Catalog counts are omitted when no catalog was checked, and the catalog table
+column is marked as not checked. JSON retains specific action labels, including
+`SKIPPED` for exceptions. Both text and Slack tables summarize actions as
+📋 PLCCDATA, 📦 OPERATOR, ✅, or ➖.
+Grouped CSV headings are ✅ OK, 📋 PLCCDATA (both PLCC actions), 📦 OPERATOR
+(both operator actions), and ➖ SKIPPED.
+
+**JSON field rename:** `summary.catalog.partial` is now
+`summary.catalog.incomplete`, matching the PLCC summary counter. The old key is
+no longer emitted; JSON consumers must use `incomplete`.
+
+`NewReport` computes summary counts once for text, JSON, and Slack rendering.
+Renderers do not reclassify findings or rerun validators. Do not mutate the
+assessment while rendering a report.
+Task B's build gate, permissive policy, and required-version CLI flags are outside
+this layer's current scope.
+
+## Tests
+
+`go test ./internal/plcccheck` uses local PLCC and rendered catalog fixtures. It
+covers the five actions, status precedence, duplicate identities and aliases,
+selected validators, mandatory conversion/filter failures, and whole-product
+blocking. Completeness and regression cases include full catalog coverage,
+lifecycle-only versions, zero bundles, absent packages, and coexisting validation
+failures. Patch grouping, malformed versions, selected/all-package runs,
+absent/empty catalogs, input ownership, and deterministic results remain covered.
+No live API, registry, or `opm` is needed.
+
+Renderer tests also cover status counts, complete package-grouped details,
+unchecked/empty selections, pipeline artifact ownership, literal source text,
+and Slack truncation, including literal and oversized skip notes. Skip tests
+cover preserved evidence, policy replacement, all-skipped and unchecked-catalog
+runs, excluded counts, and four mutually exclusive CSV groups.
+`go test ./cmd/plcc-check` exercises strict grouped YAML configuration, flags, offline inputs,
+artifact contents, reuse of output directories, mandatory translation with
+`--plcc`, fatal errors, and Slack payload generation. The command E2E test builds
+the binary, checks a reviewed summary fixture and exit codes, and compares local
+`opm` rendering with pre-rendered JSON input; see `docs/E2E_TESTS.md`.
