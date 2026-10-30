@@ -64,6 +64,7 @@ converter
 
 empty-lifecycle
   - [catalog-lifecycle-mismatch] Catalog lifecycle data differs from FBC lifecycle data generated from current PLCC.
+  - [catalog-lifecycle-mismatch] lifecycles[0].versions[name="1.2"]: catalog=<absent>; generated from PLCC={"name":"1.2","phases":[{"endDate":"2020-12-31","name":"Full support","startDate":"2020-01-01"}]}
   - [catalog-lifecycle-version-missing] Catalog lifecycle version 1.2 is missing; required by catalog bundles.
 
 empty-plcc
@@ -80,6 +81,7 @@ lifecycle-only
 
 mixed
   - [catalog-lifecycle-mismatch] Catalog lifecycle data differs from FBC lifecycle data generated from current PLCC.
+  - [catalog-lifecycle-mismatch] lifecycles[0].versions[name="1.3"]: catalog=<absent>; generated from PLCC={"name":"1.3","phases":[{"endDate":"2020-12-31","name":"Full support","startDate":"2020-01-01"}]}
   - [catalog-lifecycle-version-missing] Catalog lifecycle version 1.3 is missing; required by catalog bundles.
   - [plcc-version-missing] PLCC version 1.4 is missing; required by catalog bundles.
   - [catalog-lifecycle-version-missing] Catalog lifecycle version 1.4 is missing; required by catalog bundles.

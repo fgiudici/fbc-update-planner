@@ -102,7 +102,7 @@ func TestReportStatusesCountsAndDetails(t *testing.T) {
 	if !reflect.DeepEqual(decoded.Summary, want) || !decoded.Assessment.Packages[0].hasIssue(RegressedPLCCVersion) || !decoded.Assessment.Packages[0].hasIssue(MismatchedCatalogLifecycle) {
 		t.Fatalf("JSON lost summary or issue evidence: %s", encoded)
 	}
-	if strings.Contains(string(encoded), "filteredPLCC") || strings.Contains(string(encoded), "phases") {
+	if decoded.Assessment.FilteredPLCC != nil || decoded.Assessment.FBC != nil {
 		t.Fatal("assessment JSON contains pipeline artifacts")
 	}
 }
@@ -158,7 +158,8 @@ func TestReportLifecycleMismatchAndSkips(t *testing.T) {
 		slack.WriteByte('\n')
 	}
 	for format, text := range map[string]string{"text": r.Text(), "Slack": slack.String()} {
-		for _, want := range []string{"MISMATCH", "[catalog-lifecycle-mismatch] Catalog lifecycle data differs", "📦 OPERATOR - operators that need a catalog rebuild 1/1"} {
+		for _, want := range []string{"MISMATCH", "[catalog-lifecycle-mismatch] Catalog lifecycle data differs", "📦 OPERATOR - operators that need a catalog rebuild 1/1",
+			`lifecycles[0].versions[name="1.10"].phases[0].endDate: catalog="2020-12-30"; generated from PLCC="2020-12-31"`} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing %q: %s", format, want, text)
 			}
@@ -417,6 +418,28 @@ func TestAssessmentRetainsPipelineOutputs(t *testing.T) {
 	}
 	if findPackage(t, assessment, "beta").ProducedVersions[0].String() != "1.2" {
 		t.Fatal("pipeline output mutation changed report evidence")
+	}
+}
+
+func TestReportLifecycleDifferencePresence(t *testing.T) {
+	pkg := PackageAssessment{
+		Name: "operator", Action: BuildOperator,
+		Issues: []Issue{{Kind: MismatchedCatalogLifecycle}},
+		Catalog: &Coverage{LifecycleDifferences: []LifecycleDifference{
+			{Path: "lifecycles[0].extra", Catalog: json.RawMessage(`null`)},
+			{Path: "lifecycles[0].other", PLCC: json.RawMessage(`[]`)},
+			{Path: "lifecycles[0].third", PLCC: json.RawMessage(`null`), Catalog: json.RawMessage(`{}`)},
+		}},
+	}
+	text := strings.Join(detailLines(pkg), "\n")
+	for _, want := range []string{
+		"lifecycles[0].extra: catalog=null; generated from PLCC=<absent>",
+		"lifecycles[0].other: catalog=<absent>; generated from PLCC=[]",
+		"lifecycles[0].third: catalog={}; generated from PLCC=null",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in %s", want, text)
+		}
 	}
 }
 

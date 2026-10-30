@@ -350,10 +350,36 @@ func TestPLCCCheckLifecycleMismatch(t *testing.T) {
 				if bytes.Contains(stdout, []byte("[catalog-lifecycle-mismatch]")) != mismatch {
 					t.Fatalf("mismatch finding missing or unexpected: %s", stdout)
 				}
+				if mismatch {
+					want := plcccheck.LifecycleDifference{Path: `lifecycles[0].versions[name="1.10"].phases[0].endDate`,
+						PLCC: json.RawMessage(`"2020-12-31"`), Catalog: json.RawMessage(`"2020-12-30"`)}
+					if !reflect.DeepEqual(pkg.Catalog.LifecycleDifferences, []plcccheck.LifecycleDifference{want}) {
+						t.Fatalf("JSON lost mismatch details: %+v", pkg.Catalog.LifecycleDifferences)
+					}
+				} else if len(pkg.Catalog.LifecycleDifferences) != 0 {
+					t.Fatalf("matching lifecycle has differences: %+v", pkg.Catalog.LifecycleDifferences)
+				}
 				payload, err := os.ReadFile(filepath.Join(dir, "slack-payload.json"))
 				if err != nil || bytes.Contains(payload, []byte("[catalog-lifecycle-mismatch]")) != mismatch ||
 					!bytes.Contains(payload, []byte(fmt.Sprintf("MISMATCH %d", wantMismatch))) {
 					t.Fatalf("incorrect Slack mismatch report: %s, %v", payload, err)
+				}
+				if mismatch {
+					var slack struct {
+						Blocks []struct{ Text struct{ Text string } }
+					}
+					if err := json.Unmarshal(payload, &slack); err != nil {
+						t.Fatal(err)
+					}
+					var slackText strings.Builder
+					for _, block := range slack.Blocks {
+						slackText.WriteString(block.Text.Text)
+					}
+					for _, output := range []string{string(stdout), slackText.String()} {
+						if !strings.Contains(output, `lifecycles[0].versions[name="1.10"].phases[0].endDate: catalog="2020-12-30"; generated from PLCC="2020-12-31"`) {
+							t.Fatalf("missing field difference: %s", output)
+						}
+					}
 				}
 				fbc, err := os.ReadFile(filepath.Join(dir, "fbc-output.yaml"))
 				if err != nil {

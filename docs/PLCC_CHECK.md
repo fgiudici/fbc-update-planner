@@ -364,10 +364,34 @@ successfully. Comparison can still run for translated packages classified as
 `INCOMPLETE` or `REGRESSED`; those PLCC statuses retain their action precedence.
 
 Differences produce one package-level `catalog-lifecycle-mismatch` issue, retained
-even when `NO BUNDLES` or `X/Y` takes status precedence. Text and Slack details
-report that catalog data differs from data generated from current PLCC. No
-field-level diff is produced. `MISMATCH` does not establish which source changed.
-Like other findings, a mismatch alone does not cause a nonzero exit status.
+even when `NO BUNDLES` or `X/Y` takes status precedence. `Coverage.LifecycleDifferences`
+is exposed as optional JSON `lifecycleDifferences`, containing every differing
+field or missing list entry. Each difference has a `path`, the FBC value generated
+from current PLCC (`plcc`), and the shipped value (`catalog`). An absent value
+omits its JSON property; explicit `null`, empty arrays, and empty objects retain
+their JSON values. The differences list is omitted for equal or unavailable
+comparisons.
+
+Text and Slack details show the same paths and both values, using `<absent>` for
+missing fields or entries. For example:
+
+```text
+lifecycles[0].versions[name="1.2"].phases[0].endDate: catalog="2026-12-31"; generated from PLCC="2027-12-31"
+```
+
+Paths address normalized records rather than positions in the original input.
+Versions and platforms are matched by name; ordered lists such as phases use
+zero-based indexes. Duplicate names add an occurrence index. Equal records and
+duplicate entries are matched first; remaining records or duplicate occurrences
+are paired in canonical JSON order. Missing entries include their entire JSON
+value, and changed compatible-platform version lists show both complete lists.
+Unknown fields are included, with quoted bracket notation for unusual keys.
+Output order is deterministic. Slack may omit lines to fit message limits;
+`summary.txt` and `assessment.json` retain every difference. Skip policies hide
+these details in text and Slack while preserving the JSON evidence.
+
+`MISMATCH` does not establish which source changed. Like other findings, a
+mismatch alone does not cause a nonzero exit status.
 
 ## Completeness and regression findings
 

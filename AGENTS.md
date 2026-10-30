@@ -149,7 +149,11 @@ FBC and compares all fields against shipped lifecycle records, including version
 without bundles. Version/platform list order is ignored; phase order, duplicates,
 and omitted/null/empty differences matter. Any product rejection skips comparison.
 `Coverage.MatchesPLCC` is optional JSON `matchesPLCC`; differences produce one
-`catalog-lifecycle-mismatch` issue. Catalog status precedence is NO BUNDLES, MISSING,
+`catalog-lifecycle-mismatch` issue. `Coverage.LifecycleDifferences` retains field
+paths and generated PLCC/catalog values as JSON evidence; text and Slack details
+show both values, distinguishing absent fields from null and empty values.
+Versions/platforms match by name, phases retain positional order, and duplicate
+occurrences remain significant. Catalog status precedence is NO BUNDLES, MISSING,
 X/Y, MISMATCH, OK. A mismatch recommends OPERATOR build when PLCC is OK; coverage
 precedence never suppresses mismatch evidence. Summaries count operators by status and show one row per
 operator (Action | Operator | PLCC | Catalog | Skipped); details group failure reasons

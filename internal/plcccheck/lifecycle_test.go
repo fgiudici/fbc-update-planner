@@ -147,11 +147,16 @@ func assertLifecycleMatch(t *testing.T, generated []*fbc.Package, shipped []json
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		got, err := lifecycleMatches(generated, shipped)
-		if err != nil || got != want {
-			t.Fatalf("lifecycleMatches() = %v, %v; want %v", got, err, want)
+	var previous []LifecycleDifference
+	for attempt := range 2 {
+		got, err := lifecycleDifferences(generated, shipped)
+		if err != nil || (len(got) == 0) != want {
+			t.Fatalf("lifecycleDifferences() = %+v, %v; want match %v", got, err, want)
 		}
+		if attempt > 0 && !reflect.DeepEqual(got, previous) {
+			t.Fatalf("non-deterministic lifecycle differences: %+v, previously %+v", got, previous)
+		}
+		previous = got
 	}
 	afterGenerated, err := json.Marshal(generated)
 	if err != nil {
@@ -164,6 +169,103 @@ func assertLifecycleMatch(t *testing.T, generated []*fbc.Package, shipped []json
 	if !bytes.Equal(beforeGenerated, afterGenerated) || !bytes.Equal(beforeShipped, afterShipped) {
 		t.Fatal("comparison mutated its inputs")
 	}
+}
+
+func TestLifecycleDifferenceDetails(t *testing.T) {
+	var generated fbc.Package
+	if err := json.Unmarshal([]byte(comparisonLifecycleJSON), &generated); err != nil {
+		t.Fatal(err)
+	}
+	const versionPath = `lifecycles[0].versions[name="1.2"]`
+	const phasePath = versionPath + `.phases[0]`
+	for _, tt := range []struct {
+		name, old, replacement, path string
+		plcc, catalog                json.RawMessage
+	}{
+		{"date changed", "2020-01-01", "2020-01-02", phasePath + ".startDate", json.RawMessage(`"2020-01-01"`), json.RawMessage(`"2020-01-02"`)},
+		{"phase renamed", "Maintenance support", "Extended support", versionPath + ".phases[1].name", json.RawMessage(`"Maintenance support"`), json.RawMessage(`"Extended support"`)},
+		{"missing date", `"startDate":"2020-01-01",`, "", phasePath + ".startDate", json.RawMessage(`"2020-01-01"`), nil},
+		{"null date", `"startDate":"2020-01-01"`, `"startDate":null`, phasePath + ".startDate", json.RawMessage(`"2020-01-01"`), json.RawMessage(`null`)},
+		{"unknown field", `"name":"1.2"`, `"name":"1.2","extra":true`, versionPath + ".extra", nil, json.RawMessage(`true`)},
+		{"escaped unknown key", `"name":"1.2"`, `"name":"1.2","a.b[0]":null`, versionPath + `["a.b[0]"]`, nil, json.RawMessage(`null`)},
+		{"unknown ordered list", `"name":"1.2"`, `"name":"1.2","extra":[2,1]`, versionPath + ".extra", nil, json.RawMessage(`[2,1]`)},
+		{"platform version", "4.18", "4.17", versionPath + `.platformCompatibility[name="openshift"].versions`, json.RawMessage(`["4.18","4.19"]`), json.RawMessage(`["4.17","4.19"]`)},
+		{"duplicate platform version", `["4.18","4.19"]`, `["4.18","4.19","4.18"]`, versionPath + `.platformCompatibility[name="openshift"].versions`, json.RawMessage(`["4.18","4.19"]`), json.RawMessage(`["4.18","4.18","4.19"]`)},
+		{"omitted versus null", `"name":"2.0"`, `"name":"2.0","platformCompatibility":null`, `lifecycles[0].versions[name="2.0"].platformCompatibility`, nil, json.RawMessage(`null`)},
+		{"omitted versus empty", `"name":"2.0"`, `"name":"2.0","platformCompatibility":[]`, `lifecycles[0].versions[name="2.0"].platformCompatibility`, nil, json.RawMessage(`[]`)},
+		{"malformed phases", `"phases":[
+      {"name":"Full support", "startDate":"2021-01-01", "endDate":"2021-12-31"}
+    ]`, `"phases":false`, `lifecycles[0].versions[name="2.0"].phases`, json.RawMessage(`[{"endDate":"2021-12-31","name":"Full support","startDate":"2021-01-01"}]`), json.RawMessage(`false`)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := json.RawMessage(strings.Replace(comparisonLifecycleJSON, tt.old, tt.replacement, 1))
+			got, err := lifecycleDifferences([]*fbc.Package{&generated}, []json.RawMessage{raw})
+			want := []LifecycleDifference{{Path: tt.path, PLCC: tt.plcc, Catalog: tt.catalog}}
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("differences = %+v, %v; want %+v", got, err, want)
+			}
+			encoded, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded []LifecycleDifference
+			if err := json.Unmarshal(encoded, &decoded); err != nil || !reflect.DeepEqual(decoded, want) {
+				t.Fatalf("JSON lost absent/null/value evidence: %s, %v", encoded, err)
+			}
+		})
+	}
+}
+
+func TestLifecycleDifferenceListMatching(t *testing.T) {
+	var generated fbc.Package
+	if err := json.Unmarshal([]byte(comparisonLifecycleJSON), &generated); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, path string
+		edit       func(map[string]any)
+		absentPLCC bool
+	}{
+		{"missing version leaves other versions matched", `lifecycles[0].versions[name="1.2"]`, func(record map[string]any) {
+			record["versions"] = record["versions"].([]any)[1:]
+		}, false},
+		{"extra version leaves other versions matched", `lifecycles[0].versions[name="0.1"]`, func(record map[string]any) {
+			record["versions"] = append(record["versions"].([]any), map[string]any{"name": "0.1"})
+		}, true},
+		{"duplicate version", `lifecycles[0].versions[name="1.2"][1]`, func(record map[string]any) {
+			versions := record["versions"].([]any)
+			record["versions"] = append(versions, versions[0])
+		}, true},
+		{"missing platform", `lifecycles[0].versions[name="1.2"].platformCompatibility[name="openshift"]`, func(record map[string]any) {
+			version := record["versions"].([]any)[0].(map[string]any)
+			version["platformCompatibility"] = version["platformCompatibility"].([]any)[1:]
+		}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var record map[string]any
+			if err := json.Unmarshal([]byte(comparisonLifecycleJSON), &record); err != nil {
+				t.Fatal(err)
+			}
+			tt.edit(record)
+			raw, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			differences, err := lifecycleDifferences([]*fbc.Package{&generated}, []json.RawMessage{raw})
+			if err != nil || len(differences) != 1 || differences[0].Path != tt.path ||
+				(differences[0].PLCC == nil) != tt.absentPLCC || (differences[0].Catalog == nil) == tt.absentPLCC {
+				t.Fatalf("unexpected list differences: %+v, %v", differences, err)
+			}
+		})
+	}
+	t.Run("match unchanged records before pairing changed records", func(t *testing.T) {
+		changed := json.RawMessage(strings.Replace(comparisonLifecycleJSON, "2020-01-01", "2020-01-02", 1))
+		unchanged := json.RawMessage(comparisonLifecycleJSON)
+		differences, err := lifecycleDifferences([]*fbc.Package{&generated, &generated}, []json.RawMessage{changed, unchanged})
+		if err != nil || len(differences) != 1 || differences[0].Path != `lifecycles[1].versions[name="1.2"].phases[0].startDate` {
+			t.Fatalf("unchanged record was not matched: %+v, %v", differences, err)
+		}
+	})
 }
 
 func TestAssessLifecycleComparison(t *testing.T) {
@@ -227,12 +329,18 @@ func TestAssessLifecycleComparison(t *testing.T) {
 			if pkg.hasIssue(MismatchedCatalogLifecycle) != mismatch {
 				t.Fatalf("unexpected mismatch evidence: %+v", pkg.Issues)
 			}
+			if (len(pkg.Catalog.LifecycleDifferences) > 0) != mismatch {
+				t.Fatalf("unexpected difference evidence: %+v", pkg.Catalog.LifecycleDifferences)
+			}
 			data, err := json.Marshal(pkg.Catalog)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if bytes.Contains(data, []byte(`"matchesPLCC"`)) != (tt.match != nil) {
 				t.Fatalf("comparison availability lost in JSON: %s", data)
+			}
+			if bytes.Contains(data, []byte(`"lifecycleDifferences"`)) != mismatch {
+				t.Fatalf("difference evidence lost in JSON: %s", data)
 			}
 		})
 	}

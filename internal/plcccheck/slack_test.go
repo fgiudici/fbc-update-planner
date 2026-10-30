@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -109,7 +110,7 @@ func TestActionPresentation(t *testing.T) {
 }
 
 func TestSlackLimitsAndLiteralText(t *testing.T) {
-	for _, kind := range []string{"many rows", "many packages with details", "oversized row and reason", "unicode", "skip notes"} {
+	for _, kind := range []string{"many rows", "many packages with details", "oversized row and reason", "lifecycle differences", "unicode", "skip notes"} {
 		t.Run(kind, func(t *testing.T) {
 			a := &Assessment{CatalogChecked: true}
 			for i := 0; i < 2500; i++ {
@@ -120,6 +121,11 @@ func TestSlackLimitsAndLiteralText(t *testing.T) {
 				case "oversized row and reason":
 					pkg.Name = strings.Repeat("x", 3100)
 					pkg.Failures = []Failure{{Stage: FBCTranslation, Reasons: []string{strings.Repeat("x", 3100)}}}
+				case "lifecycle differences":
+					pkg.Issues = []Issue{{Kind: MismatchedCatalogLifecycle}}
+					pkg.Catalog = &Coverage{LifecycleDifferences: []LifecycleDifference{{
+						Path: `lifecycles[0].extra`, Catalog: json.RawMessage(strconv.Quote(strings.Repeat("<!channel>", 400))),
+					}}}
 				case "unicode":
 					pkg.Name += strings.Repeat("界", 50)
 				case "skip notes":
@@ -127,7 +133,7 @@ func TestSlackLimitsAndLiteralText(t *testing.T) {
 				}
 				a.Packages = append(a.Packages, pkg)
 			}
-			opts := SlackOptions{Summary: true, Table: kind != "many packages with details", Details: true, RunURL: "https://github.com/org/repo/actions/runs/42"}
+			opts := SlackOptions{Summary: true, Table: kind != "many packages with details" && kind != "lifecycle differences", Details: true, RunURL: "https://github.com/org/repo/actions/runs/42"}
 			payload, err := NewReport(a).Slack(opts)
 			if err != nil {
 				t.Fatal(err)

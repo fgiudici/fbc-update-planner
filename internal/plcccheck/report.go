@@ -333,6 +333,19 @@ func detailLines(pkg PackageAssessment) []string {
 			message = fmt.Sprintf("Catalog lifecycle version %s is missing; required by catalog bundles.", version)
 		}
 		lines = append(lines, fmt.Sprintf("[%s] %s", issue.Kind, message))
+		if issue.Kind == MismatchedCatalogLifecycle && pkg.Catalog != nil {
+			for _, difference := range pkg.Catalog.LifecycleDifferences {
+				plccValue, catalogValue := string(difference.PLCC), string(difference.Catalog)
+				if difference.PLCC == nil {
+					plccValue = "<absent>"
+				}
+				if difference.Catalog == nil {
+					catalogValue = "<absent>"
+				}
+				lines = append(lines, fmt.Sprintf("[%s] %s: catalog=%s; generated from PLCC=%s",
+					issue.Kind, oneLine(difference.Path), oneLine(catalogValue), oneLine(plccValue)))
+			}
+		}
 	}
 	return lines
 }

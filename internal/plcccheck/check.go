@@ -117,6 +117,9 @@ type Coverage struct {
 	// MatchesPLCC is nil when complete lifecycle records or a successful
 	// whole-package PLCC translation are unavailable.
 	MatchesPLCC *bool `json:"matchesPLCC,omitempty"`
+	// LifecycleDifferences retains complete comparison evidence, including for
+	// skipped operators and mismatches hidden by coverage status precedence.
+	LifecycleDifferences []LifecycleDifference `json:"lifecycleDifferences,omitempty"`
 }
 
 // Status returns the catalog classification in precedence order: no bundles,
@@ -263,11 +266,13 @@ func Assess(source *plcc.Catalog, inventory *catalog.Inventory, options plcc.Dat
 			}
 			records := inventory.Packages[name].LifecycleRecords
 			if pkg.Catalog.HasLifecycle && len(records) > 0 && len(pkg.Failures) == 0 && len(generated[name]) > 0 {
-				matches, err := lifecycleMatches(generated[name], records)
+				differences, err := lifecycleDifferences(generated[name], records)
 				if err != nil {
 					return nil, fmt.Errorf("package %q lifecycle comparison: %w", name, err)
 				}
+				matches := len(differences) == 0
 				pkg.Catalog.MatchesPLCC = &matches
+				pkg.Catalog.LifecycleDifferences = differences
 			}
 		}
 		if err := pkg.collectIssues(); err != nil {
