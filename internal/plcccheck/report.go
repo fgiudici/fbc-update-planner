@@ -93,16 +93,16 @@ func NewReport(assessment *Assessment) *Report {
 			continue
 		}
 		switch pkg.Catalog.Status() {
-		case "OK":
+		case CatalogOK:
 			r.Summary.Catalog.OK++
 			if pkg.PLCC == PLCCOK {
 				r.Summary.FullyOK++
 			}
-		case "MISSING":
+		case CatalogMissing:
 			r.Summary.Catalog.Missing++
-		case "NO BUNDLES":
+		case CatalogNoBundles:
 			r.Summary.Catalog.NoBundles++
-		default:
+		case CatalogIncomplete:
 			r.Summary.Catalog.Incomplete++
 		}
 	}
@@ -264,7 +264,7 @@ func (r *Report) tableRows() [][]string {
 	for _, pkg := range r.Assessment.Packages {
 		status := "NOT CHECKED"
 		if pkg.Catalog != nil {
-			status = pkg.Catalog.Status()
+			status = pkg.Catalog.StatusText()
 		}
 		action := ""
 		if pkg.Action != OK && pkg.Action != Skipped {

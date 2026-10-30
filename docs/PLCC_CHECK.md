@@ -319,6 +319,9 @@ The malformed source remains visible in failures and raw version evidence.
 Catalog syntax checks apply to the assessed package selection.
 
 Normalized version lists are numerically sorted and deduplicated.
+`Coverage.Status()` returns a typed `CatalogStatus`: `CatalogNoBundles`,
+`CatalogMissing`, `CatalogOK`, or `CatalogIncomplete`, in that precedence order.
+`Coverage.StatusText()` formats the classification for text and Slack tables.
 Coverage counts distinct bundle `MAJOR.MINOR` values present in lifecycle data:
 
 - `NO BUNDLES`: zero bundles, regardless of lifecycle entry presence.

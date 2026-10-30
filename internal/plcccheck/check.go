@@ -93,6 +93,16 @@ type Issue struct {
 	Version *fbc.MajorMinor `json:"version,omitempty"`
 }
 
+// CatalogStatus classifies catalog coverage independently of its display text.
+type CatalogStatus string
+
+const (
+	CatalogOK         CatalogStatus = "OK"
+	CatalogMissing    CatalogStatus = "MISSING"
+	CatalogNoBundles  CatalogStatus = "NO BUNDLES"
+	CatalogIncomplete CatalogStatus = "INCOMPLETE"
+)
+
 // Coverage records catalog evidence independently of PLCC health. Version lists
 // are unique and numerically sorted; Bundles retains original identities/order.
 type Coverage struct {
@@ -103,18 +113,28 @@ type Coverage struct {
 	Covered           int              `json:"covered"`
 }
 
-// Status returns NO BUNDLES, MISSING, OK, or X/Y, in that precedence order.
-func (c Coverage) Status() string {
+// Status returns the catalog classification in precedence order: no bundles,
+// missing lifecycle entry, complete coverage, or incomplete coverage.
+func (c Coverage) Status() CatalogStatus {
 	if len(c.BundleVersions) == 0 {
-		return "NO BUNDLES"
+		return CatalogNoBundles
 	}
 	if !c.HasLifecycle {
-		return "MISSING"
+		return CatalogMissing
 	}
 	if c.Covered == len(c.BundleVersions) {
-		return "OK"
+		return CatalogOK
 	}
-	return fmt.Sprintf("%d/%d", c.Covered, len(c.BundleVersions))
+	return CatalogIncomplete
+}
+
+// StatusText formats incomplete coverage as X/Y and other statuses as labels.
+func (c Coverage) StatusText() string {
+	status := c.Status()
+	if status == CatalogIncomplete {
+		return fmt.Sprintf("%d/%d", c.Covered, len(c.BundleVersions))
+	}
+	return string(status)
 }
 
 // PackageAssessment contains the facts and actions shared by all report formats.
@@ -339,10 +359,10 @@ func (p PackageAssessment) primaryAction() Action {
 	if p.PLCC != PLCCOK {
 		return FixPLCC
 	}
-	if p.Catalog != nil && p.Catalog.Status() == "NO BUNDLES" {
+	if p.Catalog != nil && p.Catalog.Status() == CatalogNoBundles {
 		return AddOperator
 	}
-	if p.Catalog != nil && p.Catalog.Status() != "OK" {
+	if p.Catalog != nil && p.Catalog.Status() != CatalogOK {
 		return BuildOperator
 	}
 	return OK

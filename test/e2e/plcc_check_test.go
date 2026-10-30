@@ -237,8 +237,8 @@ func TestPlccCheckCatalogVersionCoverage(t *testing.T) {
 		{"cli-manager", "1/2", plcccheck.FixPLCC},
 	} {
 		pkg := assessedPackage(t, report, tt.name)
-		if pkg.Catalog.Status() != tt.coverage || pkg.Action != tt.action {
-			t.Errorf("%s: got %s / %s, want %s / %s", tt.name, pkg.Catalog.Status(), pkg.Action, tt.coverage, tt.action)
+		if pkg.Catalog.StatusText() != tt.coverage || pkg.Action != tt.action {
+			t.Errorf("%s: got %s / %s, want %s / %s", tt.name, pkg.Catalog.StatusText(), pkg.Action, tt.coverage, tt.action)
 		}
 	}
 	for _, tt := range []struct{ name, version string }{
@@ -559,7 +559,7 @@ func TestPlccCheckSurfacesStaleCatalogPackage(t *testing.T) {
 	if report.Summary.Total != 2 || report.Summary.PLCC.Missing != 1 || report.Summary.PLCC.Invalid != 1 || report.Summary.Catalog.NoBundles != 2 {
 		t.Fatalf("unexpected counts: %+v", report.Summary)
 	}
-	if pkg.Action != plcccheck.AddPLCC || pkg.PLCC != plcccheck.PLCCAbsent || pkg.Catalog.Status() != "NO BUNDLES" {
+	if pkg.Action != plcccheck.AddPLCC || pkg.PLCC != plcccheck.PLCCAbsent || pkg.Catalog.Status() != plcccheck.CatalogNoBundles {
 		t.Fatalf("unexpected stale package: %+v", pkg)
 	}
 	if !strings.Contains(string(stdout), "[plcc-version-regressed]") {

@@ -116,6 +116,33 @@ func versionIssue(kind IssueKind, version string) Issue {
 	return Issue{Kind: kind, Version: &v}
 }
 
+func TestCoverageStatus(t *testing.T) {
+	source, inventory := fixtures(t)
+	result := mustAssess(t, source, inventory, plcc.DatasetOptions{Validators: []string{"syntax", "catalog"}})
+	for _, tt := range []struct {
+		name   string
+		status CatalogStatus
+		text   string
+	}{
+		{"full", CatalogOK, "OK"},
+		{"mixed", CatalogIncomplete, "1/3"},
+		{"empty-lifecycle", CatalogIncomplete, "0/1"},
+		{"unpublished", CatalogMissing, "MISSING"},
+		{"no-bundles", CatalogNoBundles, "NO BUNDLES"},
+		{"lifecycle-only", CatalogNoBundles, "NO BUNDLES"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			coverage := findPackage(t, result, tt.name).Catalog
+			if got := coverage.Status(); got != tt.status {
+				t.Errorf("Status() = %q, want %q", got, tt.status)
+			}
+			if got := coverage.StatusText(); got != tt.text {
+				t.Errorf("StatusText() = %q, want %q", got, tt.text)
+			}
+		})
+	}
+}
+
 func TestAssessFixtures(t *testing.T) {
 	source, inventory := fixtures(t)
 	result := mustAssess(t, source, inventory, plcc.DatasetOptions{Validators: []string{"syntax", "catalog"}})
@@ -169,8 +196,8 @@ func TestAssessFixtures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pkg := findPackage(t, result, tt.name)
-			if pkg.PLCC != tt.plcc || pkg.Catalog.Status() != tt.coverage || pkg.Action != tt.action {
-				t.Errorf("PLCC/coverage/action = %s/%s/%s, want %s/%s/%s", pkg.PLCC, pkg.Catalog.Status(), pkg.Action, tt.plcc, tt.coverage, tt.action)
+			if pkg.PLCC != tt.plcc || pkg.Catalog.StatusText() != tt.coverage || pkg.Action != tt.action {
+				t.Errorf("PLCC/coverage/action = %s/%s/%s, want %s/%s/%s", pkg.PLCC, pkg.Catalog.StatusText(), pkg.Action, tt.plcc, tt.coverage, tt.action)
 			}
 			if !reflect.DeepEqual(pkg.Issues, tt.issues) {
 				t.Errorf("issues = %+v, want %+v", pkg.Issues, tt.issues)
@@ -295,7 +322,7 @@ func TestAssessSelectionAndNoCatalog(t *testing.T) {
 	}
 	empty := mustAssess(t, source, &catalog.Inventory{}, options)
 	for i, want := range []Action{AddOperator, FixPLCC, AddPLCC} {
-		if empty.Packages[i].Action != want || empty.Packages[i].Catalog.Status() != "NO BUNDLES" {
+		if empty.Packages[i].Action != want || empty.Packages[i].Catalog.Status() != CatalogNoBundles {
 			t.Errorf("empty catalog: %+v, want %s", empty.Packages[i], want)
 		}
 	}
@@ -312,7 +339,7 @@ func TestAssessPLCCHealthIndependentOfCoverage(t *testing.T) {
 	}
 	result := mustAssess(t, source, inventory, plcc.DatasetOptions{Packages: []string{"validator"}, Validators: []string{"syntax"}})
 	pkg := result.Packages[0]
-	if pkg.Action != FixPLCC || pkg.Catalog.Status() != "OK" || len(pkg.Issues) != 0 || len(pkg.Failures) == 0 {
+	if pkg.Action != FixPLCC || pkg.Catalog.Status() != CatalogOK || len(pkg.Issues) != 0 || len(pkg.Failures) == 0 {
 		t.Errorf("full catalog coverage hid PLCC failures: %+v", pkg)
 	}
 	delete(inventory.Packages, "validator")
@@ -408,7 +435,7 @@ func TestAssessCompletenessAndRegression(t *testing.T) {
 			case PLCCAbsent:
 				wantAction = AddPLCC
 			}
-			if pkg.PLCC != tt.status || pkg.Action != wantAction || pkg.Catalog.Status() != tt.coverage || !reflect.DeepEqual(pkg.Issues, tt.issues) {
+			if pkg.PLCC != tt.status || pkg.Action != wantAction || pkg.Catalog.StatusText() != tt.coverage || !reflect.DeepEqual(pkg.Issues, tt.issues) {
 				t.Fatalf("assessment = %+v, want %s/%s/%s with issues %+v", pkg, tt.status, tt.coverage, wantAction, tt.issues)
 			}
 			// All-package reports must include the same evidence, including the
