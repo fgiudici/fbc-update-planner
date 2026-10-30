@@ -495,6 +495,83 @@ func TestSlackListChunksAndLimits(t *testing.T) {
 	}
 }
 
+func TestSlackListFieldLengthBoundaries(t *testing.T) {
+	for _, encoding := range []struct {
+		name     string
+		makeName func(int) string
+	}{
+		{"ASCII", func(n int) string { return strings.Repeat("a", n) }},
+		{"Unicode", func(n int) string { return strings.Repeat("界", n) }},
+		// CSV adds surrounding quotes for commas and doubles embedded quotes.
+		{"comma", func(n int) string { return strings.Repeat("a", n-3) + "," }},
+		{"quote", func(n int) string { return strings.Repeat("a", n-4) + "\"" }},
+	} {
+		for _, tc := range []struct {
+			length, omitted int
+			chunks          []int
+		}{
+			{2999, 0, []int{2999, 4}},
+			{3000, 0, []int{3000, 4}},
+			{3001, 1, []int{4}},
+		} {
+			t.Run(fmt.Sprintf("%s/%d", encoding.name, tc.length), func(t *testing.T) {
+				// A short trailing name must survive even when the first is omitted.
+				names := []string{encoding.makeName(tc.length), "next"}
+				b := slackBuilder{payload: &SlackPayload{}, remaining: 10000}
+				b.addList("📋 PLCCDATA", names)
+				groups, _ := slackListGroups(t, b.payload)
+				if !reflect.DeepEqual(groups["PLCCDATA"], names[tc.omitted:]) || b.omittedNames != tc.omitted {
+					t.Fatalf("names changed or omissions incorrect: %d shown, %d omitted", len(groups["PLCCDATA"]), b.omittedNames)
+				}
+				var lengths []int
+				for _, block := range b.payload.Blocks {
+					if block.Type == "rich_text" {
+						lengths = append(lengths, utf8.RuneCountInString(slackBlockText(t, block)))
+					}
+				}
+				if !reflect.DeepEqual(lengths, tc.chunks) {
+					t.Fatalf("CSV chunk lengths = %v, want %v", lengths, tc.chunks)
+				}
+			})
+		}
+	}
+}
+
+func TestSlackListCSVChunkBoundaries(t *testing.T) {
+	// This name occupies 1500 characters after CSV quoting and quote doubling.
+	quoted := strings.Repeat("界", 1495) + ",\""
+	for _, tc := range []struct {
+		name   string
+		names  []string
+		chunks []int
+	}{
+		{"delimiter below limit", []string{strings.Repeat("界", 1499), strings.Repeat("語", 1499)}, []int{2999}},
+		{"delimiter at limit", []string{strings.Repeat("界", 1499), strings.Repeat("語", 1500)}, []int{3000}},
+		{"delimiter over limit", []string{strings.Repeat("界", 1500), strings.Repeat("語", 1500)}, []int{1500, 1500}},
+		{"quoting below limit", []string{quoted, strings.Repeat("語", 1498)}, []int{2999}},
+		{"quoting at limit", []string{quoted, strings.Repeat("語", 1499)}, []int{3000}},
+		{"quoting over limit", []string{quoted, strings.Repeat("語", 1500)}, []int{1500, 1500}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := slackBuilder{payload: &SlackPayload{}, remaining: 10000}
+			b.addList("📋 PLCCDATA", tc.names)
+			groups, _ := slackListGroups(t, b.payload)
+			if !reflect.DeepEqual(groups["PLCCDATA"], tc.names) || b.omittedNames != 0 {
+				t.Fatalf("names changed or omitted: %d shown, %d omitted", len(groups["PLCCDATA"]), b.omittedNames)
+			}
+			var lengths []int
+			for _, block := range b.payload.Blocks {
+				if block.Type == "rich_text" {
+					lengths = append(lengths, utf8.RuneCountInString(slackBlockText(t, block)))
+				}
+			}
+			if !reflect.DeepEqual(lengths, tc.chunks) {
+				t.Fatalf("CSV chunk lengths = %v, want %v", lengths, tc.chunks)
+			}
+		})
+	}
+}
+
 func TestSlackListReservesHeadingAndFooter(t *testing.T) {
 	for _, occupied := range []int{47, 48} {
 		b := slackBuilder{payload: &SlackPayload{}, remaining: 10000}

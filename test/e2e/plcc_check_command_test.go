@@ -261,9 +261,33 @@ func TestPLCCCheckCommand(t *testing.T) {
 	})
 	t.Run("no translatable products is still a report", func(t *testing.T) {
 		dir := t.TempDir()
-		_, code := run(t, "-i", "testdata/untranslatable.json", "--validators", "none", "-o", dir)
+		stdout, code := run(t, "-i", "testdata/untranslatable.json", "--validators", "none", "-o", dir)
 		if code != 0 {
 			t.Fatalf("findings exited %d", code)
+		}
+		summary, err := os.ReadFile(filepath.Join(dir, "summary.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(stdout, summary) {
+			t.Fatal("stdout differs from summary.txt")
+		}
+		report := readAssessment(t, dir)
+		if report.Summary.Total != 1 || report.Summary.PLCC.Invalid != 1 || report.Summary.PLCC.OK != 0 {
+			t.Fatalf("unexpected summary counts: %+v", report.Summary)
+		}
+		pkg := assessedPackage(t, report, "untranslatable-operator")
+		if pkg.PLCC != plcccheck.PLCCInvalid || pkg.Action != plcccheck.FixPLCC || len(pkg.Failures) != 1 {
+			t.Fatalf("unexpected untranslatable assessment: %+v", pkg)
+		}
+		failure := pkg.Failures[0]
+		if failure.Stage != plcccheck.FBCTranslation || !strings.Contains(strings.Join(failure.Reasons, "\n"), "FBC-VER-01") {
+			t.Fatalf("missing version conversion failure: %+v", failure)
+		}
+		for _, reason := range failure.Reasons {
+			if !bytes.Contains(summary, []byte(reason)) {
+				t.Errorf("summary missing conversion reason %q", reason)
+			}
 		}
 		data, err := os.ReadFile(filepath.Join(dir, "fbc-output.yaml"))
 		if err != nil || len(data) != 0 {
