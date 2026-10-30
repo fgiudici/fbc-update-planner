@@ -21,7 +21,7 @@ aws-efs-csi-driver-operator
 📋 PLCCDATA - operators that need PLCC fixes 3/4
 barbican-operator,totally-nonexistent-operator-xyz,amq-streams
 
-📦 OPERATOR - operators that need a catalog rebuild 0/4 (PLCC data ready, missing bundles or lifecycle data in the catalog)
+📦 OPERATOR - operators that need a catalog rebuild 0/4 (PLCC data ready, missing bundles or missing, incomplete, or mismatched lifecycle data in the catalog)
 None
 
 ➖ SKIPPED - operators excluded from action reporting 0/4

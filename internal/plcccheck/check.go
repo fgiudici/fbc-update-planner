@@ -73,7 +73,7 @@ type Failure struct {
 	Reasons     []string            `json:"reasons"`
 }
 
-// IssueKind identifies missing content independently of the operator's action.
+// IssueKind identifies content findings independently of the operator's action.
 type IssueKind string
 
 const (
@@ -83,9 +83,10 @@ const (
 	MissingCatalogBundles          IssueKind = "catalog-bundles-missing"
 	MissingCatalogLifecycle        IssueKind = "catalog-lifecycle-missing"
 	MissingCatalogLifecycleVersion IssueKind = "catalog-lifecycle-version-missing"
+	MismatchedCatalogLifecycle     IssueKind = "catalog-lifecycle-mismatch"
 )
 
-// Issue records one missing item for the owning package. Version is nil for
+// Issue records one content finding for the owning package. Version is nil for
 // package-level issues. A regressed version exists in shipped lifecycle data
 // but is absent from current PLCC, even if no bundle requires that version.
 type Issue struct {
@@ -93,7 +94,8 @@ type Issue struct {
 	Version *fbc.MajorMinor `json:"version,omitempty"`
 }
 
-// CatalogStatus classifies catalog coverage independently of its display text.
+// CatalogStatus classifies catalog coverage and lifecycle equality independently
+// of its display text.
 type CatalogStatus string
 
 const (
@@ -101,6 +103,7 @@ const (
 	CatalogMissing    CatalogStatus = "MISSING"
 	CatalogNoBundles  CatalogStatus = "NO BUNDLES"
 	CatalogIncomplete CatalogStatus = "INCOMPLETE"
+	CatalogMismatch   CatalogStatus = "MISMATCH"
 )
 
 // Coverage records catalog evidence independently of PLCC health. Version lists
@@ -111,10 +114,13 @@ type Coverage struct {
 	BundleVersions    []fbc.MajorMinor `json:"bundleVersions"`
 	LifecycleVersions []fbc.MajorMinor `json:"lifecycleVersions"`
 	Covered           int              `json:"covered"`
+	// MatchesPLCC is nil when complete lifecycle records or a successful
+	// whole-package PLCC translation are unavailable.
+	MatchesPLCC *bool `json:"matchesPLCC,omitempty"`
 }
 
 // Status returns the catalog classification in precedence order: no bundles,
-// missing lifecycle entry, complete coverage, or incomplete coverage.
+// missing lifecycle entry, incomplete coverage, mismatch, or OK.
 func (c Coverage) Status() CatalogStatus {
 	if len(c.BundleVersions) == 0 {
 		return CatalogNoBundles
@@ -122,10 +128,13 @@ func (c Coverage) Status() CatalogStatus {
 	if !c.HasLifecycle {
 		return CatalogMissing
 	}
-	if c.Covered == len(c.BundleVersions) {
-		return CatalogOK
+	if c.Covered != len(c.BundleVersions) {
+		return CatalogIncomplete
 	}
-	return CatalogIncomplete
+	if c.MatchesPLCC != nil && !*c.MatchesPLCC {
+		return CatalogMismatch
+	}
+	return CatalogOK
 }
 
 // StatusText formats incomplete coverage as X/Y and other statuses as labels.
@@ -172,6 +181,8 @@ type Assessment struct {
 
 // Assess validates and translates one PLCC snapshot and checks its completeness
 // against all bundle versions and all shipped lifecycle versions in the catalog.
+// Successful whole-package FBC output is also compared with complete shipped
+// lifecycle records, including versions without corresponding bundles.
 // It does no I/O and does not mutate its inputs. Nil inventory skips catalog
 // checks; a non-nil empty inventory means the catalog contains no packages.
 // Options uses Dataset selection semantics, including nil versus empty Packages.
@@ -194,6 +205,7 @@ func Assess(source *plcc.Catalog, inventory *catalog.Inventory, options plcc.Dat
 	}
 	snapshot := dataset.Source()
 	packages := make(map[string]*PackageAssessment)
+	generated := make(map[string][]*fbc.Package)
 	for _, finding := range validation.Products {
 		product := snapshot.Data[finding.SourceIndex]
 		for _, name := range finding.Packages {
@@ -228,6 +240,7 @@ func Assess(source *plcc.Catalog, inventory *catalog.Inventory, options plcc.Dat
 				pkg.ProducedVersions = append(pkg.ProducedVersions, version.Name)
 			}
 			result.FBC = append(result.FBC, translated)
+			generated[name] = append(generated[name], translated)
 		}
 	}
 
@@ -247,6 +260,14 @@ func Assess(source *plcc.Catalog, inventory *catalog.Inventory, options plcc.Dat
 			pkg.Catalog, err = coverage(name, inventory.Packages[name])
 			if err != nil {
 				return nil, err
+			}
+			records := inventory.Packages[name].LifecycleRecords
+			if pkg.Catalog.HasLifecycle && len(records) > 0 && len(pkg.Failures) == 0 && len(generated[name]) > 0 {
+				matches, err := lifecycleMatches(generated[name], records)
+				if err != nil {
+					return nil, fmt.Errorf("package %q lifecycle comparison: %w", name, err)
+				}
+				pkg.Catalog.MatchesPLCC = &matches
 			}
 		}
 		if err := pkg.collectIssues(); err != nil {
@@ -327,6 +348,9 @@ func (p *PackageAssessment) collectIssues() error {
 	}
 	if !p.Catalog.HasLifecycle {
 		p.Issues = append(p.Issues, Issue{Kind: MissingCatalogLifecycle})
+	}
+	if p.Catalog.MatchesPLCC != nil && !*p.Catalog.MatchesPLCC {
+		p.Issues = append(p.Issues, Issue{Kind: MismatchedCatalogLifecycle})
 	}
 	versions := slices.Clone(p.Catalog.BundleVersions)
 	if p.Catalog.HasLifecycle {

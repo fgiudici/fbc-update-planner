@@ -30,13 +30,16 @@ type Inventory struct {
 	Packages map[string]Package
 }
 
-// Package records the bundle and lifecycle metadata needed for coverage checks.
+// Package records the bundle and lifecycle data needed for catalog checks.
 // Slices retain encounter order and duplicates; versions are not normalized.
 type Package struct {
 	Bundles []Bundle
 	// HasLifecycle distinguishes an empty lifecycle entry from an absent one.
 	HasLifecycle      bool
 	LifecycleVersions []string
+	// LifecycleRecords retains complete records, including unknown fields, for
+	// comparison with generated lifecycle data. Records are not validated here.
+	LifecycleRecords []json.RawMessage
 }
 
 // Bundle identifies a catalog bundle and its original olm.package version.
@@ -46,8 +49,8 @@ type Bundle struct {
 }
 
 // Parse reads a stream of JSON catalog objects, as produced by opm render.
-// It reads bundle and lifecycle metadata and ignores other schemas and unused
-// fields. Lifecycle records without a package name are ignored for compatibility
+// It reads bundle metadata and complete lifecycle records, ignoring other
+// schemas. Lifecycle records without a package name are ignored for compatibility
 // with the existing reporting script. Empty input yields an empty inventory.
 //
 // Consumed metadata must have the expected JSON types and required nonempty
@@ -152,6 +155,7 @@ func (in *Inventory) addLifecycle(raw json.RawMessage) error {
 	}
 	pkg := in.Packages[record.Package]
 	pkg.HasLifecycle = true
+	pkg.LifecycleRecords = append(pkg.LifecycleRecords, raw)
 	for i, version := range versions {
 		if version.Name == "" {
 			return fmt.Errorf("package %q: lifecycle version %d: name must be nonempty", record.Package, i+1)

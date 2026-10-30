@@ -38,7 +38,7 @@ func TestReportStatusesCountsAndDetails(t *testing.T) {
 		Total:      7,
 		NonSkipped: 7,
 		PLCC:       PLCCCounts{OK: 2, Missing: 1, Duplicate: 1, Invalid: 1, Regressed: 1, Incomplete: 1},
-		Catalog:    &CatalogCounts{OK: 1, Incomplete: 1, Missing: 4, NoBundles: 1},
+		Catalog:    &CatalogCounts{Mismatch: 1, Incomplete: 1, Missing: 4, NoBundles: 1},
 	}
 	if !reflect.DeepEqual(r.Summary, want) {
 		t.Fatalf("summary = %+v, want %+v", r.Summary, want)
@@ -49,7 +49,7 @@ func TestReportStatusesCountsAndDetails(t *testing.T) {
 	}
 	for _, want := range []string{
 		"PLCC: OK 2 | MISSING 1 | INCOMPLETE 1 | INVALID 1 | REGRESSED 1 | DUPLICATE 1\n",
-		"Catalog: OK 1 | MISSING 4 | INCOMPLETE 1 | NO BUNDLES 1\n",
+		"Catalog: OK 0 | MISSING 4 | INCOMPLETE 1 | NO BUNDLES 1 | MISMATCH 1\n",
 		"ACTION", "OPERATOR", "PLCC", "CATALOG",
 		"REGRESSED", "INCOMPLETE", "NO BUNDLES", "1/3",
 		"PLCC version 1.10 is missing but its lifecycle data is already shipped",
@@ -92,14 +92,14 @@ func TestReportStatusesCountsAndDetails(t *testing.T) {
 	if err := json.Unmarshal(encoded, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if got := wire.Summary.Catalog; !reflect.DeepEqual(got, map[string]int{"ok": 1, "missing": 4, "incomplete": 1, "noBundles": 1}) {
+	if got := wire.Summary.Catalog; !reflect.DeepEqual(got, map[string]int{"ok": 0, "missing": 4, "incomplete": 1, "noBundles": 1, "mismatch": 1}) {
 		t.Fatalf("unexpected catalog summary JSON fields: %v", got)
 	}
 	var decoded Report
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(decoded.Summary, want) || decoded.Assessment.Packages[0].Issues[0].Kind != RegressedPLCCVersion {
+	if !reflect.DeepEqual(decoded.Summary, want) || !decoded.Assessment.Packages[0].hasIssue(RegressedPLCCVersion) || !decoded.Assessment.Packages[0].hasIssue(MismatchedCatalogLifecycle) {
 		t.Fatalf("JSON lost summary or issue evidence: %s", encoded)
 	}
 	if strings.Contains(string(encoded), "filteredPLCC") || strings.Contains(string(encoded), "phases") {
@@ -135,6 +135,58 @@ func TestReportCatalogSource(t *testing.T) {
 			}
 			assertSummaryPresentation(t, r, "")
 		})
+	}
+}
+
+func TestReportLifecycleMismatchAndSkips(t *testing.T) {
+	source, inventory := fixtures(t)
+	pkg := inventory.Packages["full"]
+	pkg.LifecycleRecords[0] = json.RawMessage(strings.Replace(string(pkg.LifecycleRecords[0]), "2020-12-31", "2020-12-30", 1))
+	a := mustAssess(t, source, inventory, plcc.DatasetOptions{Packages: []string{"full"}, Validators: []string{"syntax", "catalog"}})
+	r := NewReport(a)
+	if r.Summary.FullyOK != 0 || r.Summary.Catalog.Mismatch != 1 || r.Summary.Catalog.OK != 0 {
+		t.Fatalf("mismatch counted as ready: %+v", r.Summary)
+	}
+	assertSummaryPresentation(t, r, "READY operators: 0/1")
+	payload, err := r.Slack(SlackOptions{Summary: true, Table: true, List: true, Details: true, RunURL: "https://github.com/org/repo/actions/runs/42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var slack strings.Builder
+	for _, block := range payload.Blocks {
+		slack.WriteString(slackBlockText(t, block))
+		slack.WriteByte('\n')
+	}
+	for format, text := range map[string]string{"text": r.Text(), "Slack": slack.String()} {
+		for _, want := range []string{"MISMATCH", "[catalog-lifecycle-mismatch] Catalog lifecycle data differs", "📦 OPERATOR - operators that need a catalog rebuild 1/1"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing %q: %s", format, want, text)
+			}
+		}
+	}
+	before, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ApplySkips(map[string]string{"full": "Known exception"}); err != nil {
+		t.Fatal(err)
+	}
+	r = NewReport(a)
+	if r.Summary.NonSkipped != 0 || r.Summary.Skipped != 1 || r.Summary.Catalog.Mismatch != 0 || !a.Packages[0].hasIssue(MismatchedCatalogLifecycle) || *a.Packages[0].Catalog.MatchesPLCC {
+		t.Fatalf("skip lost mismatch evidence or included counts: %+v", r)
+	}
+	if lines := detailLines(a.Packages[0]); !reflect.DeepEqual(lines, []string{"[SKIPPED] Known exception"}) {
+		t.Fatalf("skipped details = %v", lines)
+	}
+	if err := a.ApplySkips(nil); err != nil {
+		t.Fatal(err)
+	}
+	after, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) || a.Packages[0].Action != BuildOperator {
+		t.Fatal("clearing skip policy did not restore mismatch action and evidence")
 	}
 }
 

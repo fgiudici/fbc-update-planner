@@ -17,6 +17,7 @@ limitations under the License.
 package catalog_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,6 +31,11 @@ import (
 const bundleJSON = `{"schema":"olm.bundle","package":"alpha","name":"alpha.v1.2.3","properties":[{"type":"olm.package","value":{"packageName":"alpha","version":"1.2.3"}}]}`
 
 const lifecycleJSON = `{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"alpha","versions":[{"name":"1.2"}]}`
+
+const lifecycleWithFieldsJSON = `{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"alpha","versions":[
+  {"name":"1.2", "phases":"unused", "platformCompatibility":42},
+  {"name":"1.3"}
+]}`
 
 func TestParseInventory(t *testing.T) {
 	input := bundleJSON + `
@@ -45,10 +51,7 @@ func TestParseInventory(t *testing.T) {
 {"schema":"olm.package","name":"package-without-coverage-data"}
 {"schema":"example.unknown","package":42,"properties":"unused"}
 {"schema":"olm.channel","package":"alpha","entries":[]}
-{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"alpha","versions":[
-  {"name":"1.2", "phases":"unused", "platformCompatibility":42},
-  {"name":"1.3"}
-]}
+` + lifecycleWithFieldsJSON + `
 {"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"gamma","versions":[{"name":"9.1"}]}
 {"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"empty","versions":[]}
 ` + lifecycleJSON + bundleJSON
@@ -64,10 +67,11 @@ func TestParseInventory(t *testing.T) {
 			},
 			HasLifecycle:      true,
 			LifecycleVersions: []string{"1.2", "1.3", "1.2"},
+			LifecycleRecords:  []json.RawMessage{json.RawMessage(lifecycleWithFieldsJSON), json.RawMessage(lifecycleJSON)},
 		},
 		"beta":  {Bundles: []catalog.Bundle{{Name: "beta.v2.0.1-rc.1", Version: "2.0.1-rc.1+build.7"}}},
-		"gamma": {HasLifecycle: true, LifecycleVersions: []string{"9.1"}},
-		"empty": {HasLifecycle: true},
+		"gamma": {HasLifecycle: true, LifecycleVersions: []string{"9.1"}, LifecycleRecords: []json.RawMessage{json.RawMessage(`{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"gamma","versions":[{"name":"9.1"}]}`)}},
+		"empty": {HasLifecycle: true, LifecycleRecords: []json.RawMessage{json.RawMessage(`{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"empty","versions":[]}`)}},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("inventory = %#v, want %#v", got.Packages, want.Packages)
@@ -94,7 +98,7 @@ func TestParseLifecyclePresence(t *testing.T) {
 			t.Fatal(err)
 		}
 		pkg, found := got.Packages["alpha"]
-		if !found || !pkg.HasLifecycle || len(pkg.LifecycleVersions) != 0 {
+		if !found || !pkg.HasLifecycle || len(pkg.LifecycleVersions) != 0 || len(pkg.LifecycleRecords) != 1 || string(pkg.LifecycleRecords[0]) != input {
 			t.Errorf("versions %q: package = %#v, found = %t", versions, pkg, found)
 		}
 	}

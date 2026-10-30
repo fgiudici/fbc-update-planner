@@ -7,7 +7,7 @@ Total operators: 4
 Skipped operators: 0    (Status counts exclude skipped operators)
 READY operators: 0/4
 PLCC: OK 0 | MISSING 1 | INCOMPLETE 0 | INVALID 1 | REGRESSED 1 | DUPLICATE 1
-Catalog: OK 0 | MISSING 0 | INCOMPLETE 0 | NO BUNDLES 4
+Catalog: OK 0 | MISSING 0 | INCOMPLETE 0 | NO BUNDLES 4 | MISMATCH 0
 
 PLCC/Catalog X/Y: X versions available, Y versions required.
    ACTION    OPERATOR                          PLCC       CATALOG     SKIPPED
@@ -24,7 +24,7 @@ None
 📋 PLCCDATA - operators that need PLCC fixes 4/4
 aws-efs-csi-driver-operator,barbican-operator,totally-nonexistent-operator-xyz,amq-streams
 
-📦 OPERATOR - operators that need a catalog rebuild 0/4 (PLCC data ready, missing bundles or lifecycle data in the catalog)
+📦 OPERATOR - operators that need a catalog rebuild 0/4 (PLCC data ready, missing bundles or missing, incomplete, or mismatched lifecycle data in the catalog)
 None
 
 ➖ SKIPPED - operators excluded from action reporting 0/4
@@ -34,6 +34,7 @@ Details
 
 aws-efs-csi-driver-operator
   - [catalog-bundles-missing] No operator bundles are present in the catalog.
+  - [catalog-lifecycle-mismatch] Catalog lifecycle data differs from FBC lifecycle data generated from current PLCC.
   - [plcc-version-regressed] PLCC version 1.0 is missing but its lifecycle data is already shipped in the catalog.
 
 barbican-operator

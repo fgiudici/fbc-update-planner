@@ -20,6 +20,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -33,6 +34,23 @@ func TestCatalogRenderInventory(t *testing.T) {
 	got, err := catalog.Render(ctx, "testdata/catalog-fbc-versions")
 	if err != nil {
 		t.Fatal(err)
+	}
+	for name, pkg := range got.Packages {
+		if pkg.HasLifecycle {
+			if len(pkg.LifecycleRecords) != 1 {
+				t.Fatalf("%s: expected one complete lifecycle record, got %d", name, len(pkg.LifecycleRecords))
+			}
+			var record struct {
+				Package  string            `json:"package"`
+				Versions []json.RawMessage `json:"versions"`
+			}
+			if err := json.Unmarshal(pkg.LifecycleRecords[0], &record); err != nil || record.Package != name || len(record.Versions) != len(pkg.LifecycleVersions) {
+				t.Fatalf("%s: lifecycle contents were lost: %s, %v", name, pkg.LifecycleRecords[0], err)
+			}
+		}
+		// The table below checks coverage metadata separately from raw records.
+		pkg.LifecycleRecords = nil
+		got.Packages[name] = pkg
 	}
 	want := map[string]catalog.Package{
 		"aws-efs-csi-driver-operator": {HasLifecycle: true, LifecycleVersions: []string{"1.0"}},

@@ -7,7 +7,7 @@ Total operators: 14
 Skipped operators: 0    (Status counts exclude skipped operators)
 READY operators: 1/14
 PLCC: OK 5 | MISSING 2 | INCOMPLETE 1 | INVALID 5 | REGRESSED 0 | DUPLICATE 1
-Catalog: OK 1 | MISSING 8 | INCOMPLETE 2 | NO BUNDLES 3
+Catalog: OK 1 | MISSING 8 | INCOMPLETE 2 | NO BUNDLES 3 | MISMATCH 0
 
 PLCC/Catalog X/Y: X versions available, Y versions required.
    ACTION    OPERATOR         PLCC       CATALOG     SKIPPED
@@ -34,7 +34,7 @@ full
 📋 PLCCDATA - operators that need PLCC fixes 9/14
 alpha,beta,bundle-only,converter,empty-plcc,filter,mixed,stale,validator
 
-📦 OPERATOR - operators that need a catalog rebuild 4/14 (PLCC data ready, missing bundles or lifecycle data in the catalog)
+📦 OPERATOR - operators that need a catalog rebuild 4/14 (PLCC data ready, missing bundles or missing, incomplete, or mismatched lifecycle data in the catalog)
 empty-lifecycle,lifecycle-only,no-bundles,unpublished
 
 ➖ SKIPPED - operators excluded from action reporting 0/14
@@ -63,6 +63,7 @@ converter
   - [plcc-version-missing] PLCC version 1.4 is missing; required by catalog bundles.
 
 empty-lifecycle
+  - [catalog-lifecycle-mismatch] Catalog lifecycle data differs from FBC lifecycle data generated from current PLCC.
   - [catalog-lifecycle-version-missing] Catalog lifecycle version 1.2 is missing; required by catalog bundles.
 
 empty-plcc
@@ -78,6 +79,7 @@ lifecycle-only
   - [catalog-bundles-missing] No operator bundles are present in the catalog.
 
 mixed
+  - [catalog-lifecycle-mismatch] Catalog lifecycle data differs from FBC lifecycle data generated from current PLCC.
   - [catalog-lifecycle-version-missing] Catalog lifecycle version 1.3 is missing; required by catalog bundles.
   - [plcc-version-missing] PLCC version 1.4 is missing; required by catalog bundles.
   - [catalog-lifecycle-version-missing] Catalog lifecycle version 1.4 is missing; required by catalog bundles.

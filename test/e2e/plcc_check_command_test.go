@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -300,4 +301,70 @@ func TestPLCCCheckCommand(t *testing.T) {
 			t.Fatalf("fatal error: code %d, stdout %s", code, stdout)
 		}
 	})
+}
+
+func TestPLCCCheckLifecycleMismatch(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/catalog-fbc-match/full/catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operators := filepath.Join(t.TempDir(), "operators.txt")
+	if err := os.WriteFile(operators, []byte("full\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var baselineFBC []byte
+	for _, mismatch := range []bool{false, true} {
+		for _, mode := range []string{"--catalog-input", "--catalog-image"} {
+			name := fmt.Sprintf("%s/mismatch=%t", mode, mismatch)
+			t.Run(name, func(t *testing.T) {
+				input := append([]byte(nil), fixture...)
+				if mismatch {
+					input = bytes.Replace(input, []byte("2020-12-31"), []byte("2020-12-30"), 1)
+				}
+				catalogDir := t.TempDir()
+				catalogPath := filepath.Join(catalogDir, "catalog.json")
+				if err := os.WriteFile(catalogPath, input, 0644); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "--catalog-image" {
+					catalogPath = catalogDir
+				}
+				dir := t.TempDir()
+				stdout, stderr, code := runPlccCheck(t, "-i", "../../internal/plcccheck/testdata/plcc.json", "--validators", "syntax,catalog",
+					mode, catalogPath, "--webhook", "summary,table,list,details", "-o", dir, operators)
+				if code != 0 || len(stderr) != 0 {
+					t.Fatalf("exit=%d stderr=%s", code, stderr)
+				}
+				r := readAssessment(t, dir)
+				pkg := assessedPackage(t, r, "full")
+				wantReady, wantMismatch := 1, 0
+				wantStatus, wantAction := plcccheck.CatalogOK, plcccheck.OK
+				if mismatch {
+					wantReady, wantMismatch = 0, 1
+					wantStatus, wantAction = plcccheck.CatalogMismatch, plcccheck.BuildOperator
+				}
+				if pkg.Catalog.MatchesPLCC == nil || *pkg.Catalog.MatchesPLCC == mismatch || pkg.Catalog.Status() != wantStatus || pkg.Action != wantAction ||
+					r.Summary.FullyOK != wantReady || r.Summary.Catalog.Mismatch != wantMismatch || r.Summary.NonSkipped != 1 {
+					t.Fatalf("incorrect mismatch assessment: %+v, package %+v", r.Summary, pkg)
+				}
+				if bytes.Contains(stdout, []byte("[catalog-lifecycle-mismatch]")) != mismatch {
+					t.Fatalf("mismatch finding missing or unexpected: %s", stdout)
+				}
+				payload, err := os.ReadFile(filepath.Join(dir, "slack-payload.json"))
+				if err != nil || bytes.Contains(payload, []byte("[catalog-lifecycle-mismatch]")) != mismatch ||
+					!bytes.Contains(payload, []byte(fmt.Sprintf("MISMATCH %d", wantMismatch))) {
+					t.Fatalf("incorrect Slack mismatch report: %s, %v", payload, err)
+				}
+				fbc, err := os.ReadFile(filepath.Join(dir, "fbc-output.yaml"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if baselineFBC == nil {
+					baselineFBC = fbc
+				} else if !bytes.Equal(baselineFBC, fbc) {
+					t.Fatal("catalog comparison changed generated FBC output")
+				}
+			})
+		}
+	}
 }

@@ -52,6 +52,7 @@ type CatalogCounts struct {
 	Missing    int `json:"missing"`
 	Incomplete int `json:"incomplete"`
 	NoBundles  int `json:"noBundles"`
+	Mismatch   int `json:"mismatch"`
 }
 
 // Report is the common input to text, JSON and Slack rendering. Assessment and
@@ -104,6 +105,8 @@ func NewReport(assessment *Assessment) *Report {
 			r.Summary.Catalog.NoBundles++
 		case CatalogIncomplete:
 			r.Summary.Catalog.Incomplete++
+		case CatalogMismatch:
+			r.Summary.Catalog.Mismatch++
 		}
 	}
 	return r
@@ -189,7 +192,7 @@ func (r *Report) summaryParts() (overview []string, ready string, statuses []str
 		s.PLCC.OK, s.PLCC.Missing, s.PLCC.Incomplete, s.PLCC.Invalid, s.PLCC.Regressed, s.PLCC.Duplicate))
 	if c := s.Catalog; c != nil {
 		ready = fmt.Sprintf("READY operators: %d/%d", s.FullyOK, s.NonSkipped)
-		statuses = append(statuses, fmt.Sprintf("Catalog: OK %d | MISSING %d | INCOMPLETE %d | NO BUNDLES %d", c.OK, c.Missing, c.Incomplete, c.NoBundles))
+		statuses = append(statuses, fmt.Sprintf("Catalog: OK %d | MISSING %d | INCOMPLETE %d | NO BUNDLES %d | MISMATCH %d", c.OK, c.Missing, c.Incomplete, c.NoBundles, c.Mismatch))
 	} else {
 		statuses = append(statuses, "Catalog: NOT CHECKED", "OK means: PLCC OK; catalog not checked.")
 	}
@@ -225,7 +228,7 @@ func (r *Report) actionLists() []actionList {
 			description = "operators that need PLCC fixes"
 		case BuildOperator:
 			description = "operators that need a catalog rebuild"
-			qualifier = " (PLCC data ready, missing bundles or lifecycle data in the catalog)"
+			qualifier = " (PLCC data ready, missing bundles or missing, incomplete, or mismatched lifecycle data in the catalog)"
 		case Skipped:
 			description = "operators excluded from action reporting"
 		}
@@ -321,6 +324,8 @@ func detailLines(pkg PackageAssessment) []string {
 			message = "No operator bundles are present in the catalog."
 		case MissingCatalogLifecycle:
 			message = "No lifecycle entry is present in the catalog."
+		case MismatchedCatalogLifecycle:
+			message = "Catalog lifecycle data differs from FBC lifecycle data generated from current PLCC."
 		case MissingCatalogLifecycleVersion:
 			if missingLifecycle {
 				continue

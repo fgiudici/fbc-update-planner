@@ -58,6 +58,7 @@ This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API leve
 | `TestPlccCheckAllPackages` | Full snapshot, validators disabled | FBC matches reference byte-for-byte; 142 operators, 61 OK and 81 invalid |
 | `TestPLCCCheckCommand` | Compact fixtures and real local opm | Complete report golden; YAML selection and skip groups; preserved evidence/artifacts and excluded counts; JSON/text/Slack consistency; rendered JSON/opm parity; exit 0 with empty FBC artifact for untranslatable input; fatal input exits 1 |
 | `TestPLCCCheckInterruptsFetch` | Stalled local HTTPS proxy | Ctrl+C cancels the PLCC fetch promptly, exits 1 with a cancellation diagnostic, logs the failure, and removes a stale Slack payload |
+| `TestPLCCCheckLifecycleMismatch` | Matching lifecycle and a one-day date change, via rendered JSON and local opm | Whole-package equality including versions without bundles; MISMATCH status, action, summary, Slack, exit 0, and unchanged generated artifact |
 
 ---
 
@@ -74,6 +75,7 @@ This complements `pkg/fbc/pipeline_test.go` (integration test at the Go API leve
 | `plcc-check/operators-validation.jsonl` | Small | Pipeline failures per affected operator and failure; all original reasons. |
 | `catalog-fbc/` | Small | Lifecycle-only entry for `aws-efs-csi-driver-operator`; version `1.0` is absent from the PLCC fixture, exercising regression. |
 | `catalog-fbc-versions/` | Small | Bundle and lifecycle coverage for five operators; `cli-manager` lacks PLCC version `0.2`, exercising incompleteness alongside partial catalog coverage. |
+| `catalog-fbc-match/` | Small | Complete lifecycle matching compact PLCC package `full`, including version `1.10` without a bundle. Mismatch tests change one date in a temporary copy. |
 | `catalog-fbc-empty-package/`, `catalog-fbc-stale/` | Small | Empty lifecycle name and catalog-only package cases. |
 | `plcc-check/catalog-summary.txt` | Small | Selected-operator summary and details with the lifecycle-only catalog. |
 | `plcc-check/command-summary.txt` | Small | Complete report for the compact PLCC/catalog fixtures in `internal/plcccheck/testdata`. |

@@ -117,7 +117,8 @@ external binary. `catalog.Render(context.Context, reference)` invokes `opm rende
 and uses the same parser, inheriting registry authentication from the environment.
 Both return a caller-owned `catalog.Inventory` keyed by package name, containing
 bundle identities and original versions, lifecycle entry presence, and lifecycle
-version names. Other schemas and unused fields are ignored. Consumed metadata
+version names and complete raw lifecycle records (`LifecycleRecords`). Other schemas
+and unused bundle fields are ignored; unknown lifecycle fields are retained. Consumed metadata
 errors discard the entire inventory; lifecycle records without a package name are
 ignored for compatibility. Version syntax checks, MAJOR.MINOR normalization,
 deduplication, and PLCC comparison belong to callers. The reporting command uses
@@ -143,8 +144,14 @@ source PLCC / distinct bundle MAJOR.MINOR versions, sharing the catalog denomina
 Summary counts and JSON use INCOMPLETE (`incomplete`) for both PLCC and catalog
 version gaps.
 Completeness checks all bundle versions; regression checks all shipped lifecycle
-versions, including those without bundles. Catalog status is NO BUNDLES, MISSING,
-OK, or X/Y. Summaries count operators by status and show one row per
+versions, including those without bundles. Whole-package equality reuses generated
+FBC and compares all fields against shipped lifecycle records, including versions
+without bundles. Version/platform list order is ignored; phase order, duplicates,
+and omitted/null/empty differences matter. Any product rejection skips comparison.
+`Coverage.MatchesPLCC` is optional JSON `matchesPLCC`; differences produce one
+`catalog-lifecycle-mismatch` issue. Catalog status precedence is NO BUNDLES, MISSING,
+X/Y, MISMATCH, OK. A mismatch recommends OPERATOR build when PLCC is OK; coverage
+precedence never suppresses mismatch evidence. Summaries count operators by status and show one row per
 operator (Action | Operator | PLCC | Catalog | Skipped); details group failure reasons
 and issues by package, showing only the skip note for skipped operators.
 Status counts and READY exclude skipped operators. Both summaries identify the

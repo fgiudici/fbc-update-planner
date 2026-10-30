@@ -327,7 +327,7 @@ func TestSlackActionLists(t *testing.T) {
 	for _, heading := range []string{
 		"✅ OK - operators ready 2/8",
 		"📋 PLCCDATA - operators that need PLCC fixes 4/8",
-		"📦 OPERATOR - operators that need a catalog rebuild 2/8 (PLCC data ready, missing bundles or lifecycle data in the catalog)",
+		"📦 OPERATOR - operators that need a catalog rebuild 2/8 (PLCC data ready, missing bundles or missing, incomplete, or mismatched lifecycle data in the catalog)",
 		"➖ SKIPPED - operators excluded from action reporting 0/8",
 	} {
 		found := false

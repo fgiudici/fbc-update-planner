@@ -155,6 +155,7 @@ func TestAssessFixtures(t *testing.T) {
 	}{
 		{"full", PLCCOK, "OK", OK, nil},
 		{"mixed", PLCCIncomplete, "1/3", FixPLCC, []Issue{
+			{Kind: MismatchedCatalogLifecycle},
 			versionIssue(MissingCatalogLifecycleVersion, "1.3"), versionIssue(MissingPLCCVersion, "1.4"), versionIssue(MissingCatalogLifecycleVersion, "1.4"),
 		}},
 		{"unpublished", PLCCOK, "MISSING", BuildOperator, []Issue{
@@ -179,7 +180,7 @@ func TestAssessFixtures(t *testing.T) {
 		}},
 		{"no-bundles", PLCCOK, "NO BUNDLES", AddOperator, []Issue{{Kind: MissingCatalogBundles}, {Kind: MissingCatalogLifecycle}}},
 		{"lifecycle-only", PLCCOK, "NO BUNDLES", AddOperator, []Issue{{Kind: MissingCatalogBundles}}},
-		{"empty-lifecycle", PLCCOK, "0/1", BuildOperator, []Issue{versionIssue(MissingCatalogLifecycleVersion, "1.2")}},
+		{"empty-lifecycle", PLCCOK, "0/1", BuildOperator, []Issue{{Kind: MismatchedCatalogLifecycle}, versionIssue(MissingCatalogLifecycleVersion, "1.2")}},
 		{"bundle-only", PLCCAbsent, "MISSING", AddPLCC, []Issue{
 			{Kind: MissingPLCCPackage}, {Kind: MissingCatalogLifecycle}, versionIssue(MissingPLCCVersion, "1.2"), versionIssue(MissingCatalogLifecycleVersion, "1.2"),
 		}},
@@ -564,6 +565,11 @@ func TestAssessOwnershipAndDeterminism(t *testing.T) {
 		for i := range pkg.LifecycleVersions {
 			pkg.LifecycleVersions[i] = "changed"
 		}
+		for _, raw := range pkg.LifecycleRecords {
+			for i := range raw {
+				raw[i] = ' '
+			}
+		}
 	}
 	options.Validators[0] = "changed"
 	assessmentAfter, err := json.Marshal(first)
@@ -574,8 +580,8 @@ func TestAssessOwnershipAndDeterminism(t *testing.T) {
 		t.Error("assessment retained mutable input references")
 	}
 	// Issue versions must be owned by the assessment, including between runs.
-	findPackage(t, first, "mixed").Issues[0].Version.Minor = 99
-	if got := findPackage(t, second, "mixed").Issues[0].Version.Minor; got != 3 {
+	findPackage(t, first, "mixed").Issues[1].Version.Minor = 99
+	if got := findPackage(t, second, "mixed").Issues[1].Version.Minor; got != 3 {
 		t.Errorf("independent assessments share issue versions: got %d, want 3", got)
 	}
 	findPackage(t, first, "alpha").Failures[0].Reasons[0] = "changed"

@@ -173,7 +173,7 @@ over the total number of operators in the report. For example:
 ```text
 ✅ OK - operators ready 2/8
 📋 PLCCDATA - operators that need PLCC fixes 4/8
-📦 OPERATOR - operators that need a catalog rebuild 2/8 (PLCC data ready, missing bundles or lifecycle data in the catalog)
+📦 OPERATOR - operators that need a catalog rebuild 2/8 (PLCC data ready, missing bundles or missing, incomplete, or mismatched lifecycle data in the catalog)
 ➖ SKIPPED - operators excluded from action reporting 0/8
 ```
 
@@ -320,19 +320,54 @@ Catalog syntax checks apply to the assessed package selection.
 
 Normalized version lists are numerically sorted and deduplicated.
 `Coverage.Status()` returns a typed `CatalogStatus`: `CatalogNoBundles`,
-`CatalogMissing`, `CatalogOK`, or `CatalogIncomplete`, in that precedence order.
+`CatalogMissing`, `CatalogIncomplete`, `CatalogMismatch`, or `CatalogOK`, in that precedence order.
 `Coverage.StatusText()` formats the classification for text and Slack tables.
 Coverage counts distinct bundle `MAJOR.MINOR` values present in lifecycle data:
 
 - `NO BUNDLES`: zero bundles, regardless of lifecycle entry presence.
 - `MISSING`: bundles exist but there is no lifecycle entry.
-- `OK`: bundles exist and every required version is present in lifecycle data.
 - `X/Y`: an entry exists but only X of Y required versions are present.
+- `MISMATCH`: coverage is complete, but shipped lifecycle data differs from
+  lifecycle data generated from current PLCC.
+- `OK`: coverage is complete and no lifecycle mismatch was found.
 
 These statuses apply in the order listed. An empty lifecycle entry with bundles
-produces `0/Y`. Coverage evaluates version presence only; it does not inspect
-shipped phases or compatibility data. PLCC versions without bundles do not imply
+produces `0/Y`. Coverage counts evaluate version presence; the additional equality
+check inspects complete lifecycle contents. PLCC versions without bundles do not imply
 missing bundles: only zero bundles produces `NO BUNDLES`.
+
+## Lifecycle equality
+
+Whenever complete catalog lifecycle records and successful PLCC translations are
+available, assessment compares the whole generated package with its shipped data.
+It reuses the validation/translation pass that produces `fbc-output.yaml`; it does
+not fetch PLCC again or apply cleanup filters to shipped records. A missing or
+extra lifecycle version counts as a difference even without a corresponding bundle.
+
+JSON whitespace and object-field order do not matter. Operator version entries,
+platform entries, compatible platform versions, and separate records for a package
+are compared without regard to ordering, preserving duplicates. Phase ordering
+remains significant. Every other field and value is compared, including unknown
+fields, and omitted, null, and empty values remain distinct. Invalid phase or
+compatibility field types that passed metadata parsing are differences, not fatal
+execution errors. Existing catalog version syntax errors remain fatal.
+
+`catalog.Package.LifecycleRecords` retains complete raw records from `Parse` and
+`Render`. Multiple translated products are compared against all shipped records
+for their package, without merging or discarding duplicates.
+`Coverage.MatchesPLCC` is exposed as optional JSON `matchesPLCC`: true for equality,
+false for differences, omitted if complete records or successful translation are
+unavailable. Caller-built inventories containing coverage metadata alone continue
+to support coverage checks without equality assessment. Any product rejection
+prevents comparison for that package, including when another product translated
+successfully. Comparison can still run for translated packages classified as
+`INCOMPLETE` or `REGRESSED`; those PLCC statuses retain their action precedence.
+
+Differences produce one package-level `catalog-lifecycle-mismatch` issue, retained
+even when `NO BUNDLES` or `X/Y` takes status precedence. Text and Slack details
+report that catalog data differs from data generated from current PLCC. No
+field-level diff is produced. `MISMATCH` does not establish which source changed.
+Like other findings, a mismatch alone does not cause a nonzero exit status.
 
 ## Completeness and regression findings
 
@@ -347,6 +382,7 @@ issues have no version. Version findings have no action of their own.
 | `plcc-version-regressed` | Shipped lifecycle version absent from source PLCC |
 | `catalog-bundles-missing` | Operator has zero bundles |
 | `catalog-lifecycle-missing` | No lifecycle entry exists for the operator |
+| `catalog-lifecycle-mismatch` | Whole generated lifecycle data differs from shipped records |
 | `catalog-lifecycle-version-missing` | Required bundle MAJOR.MINOR absent from catalog lifecycle data |
 
 PLCC completeness checks **all bundle versions**, including those already covered
@@ -362,7 +398,7 @@ entry-level issue and each uncovered bundle version, so no affected version is
 lost. The absence of bundles and lifecycle data produces both package-level issues.
 
 Issues are deterministic: package-level issues first (PLCC package, bundles,
-lifecycle entry), then version issues in numeric order, PLCC before catalog for
+lifecycle entry, lifecycle mismatch), then version issues in numeric order, PLCC before catalog for
 the same version. Each distinct affected MAJOR.MINOR is reported once per kind.
 Validation/conversion failures remain in `Failures`, retaining all original
 reasons and metadata independently of these issues.
@@ -395,7 +431,7 @@ for non-skipped operators, human-readable details.
 3. **OPERATOR add** when PLCC is `OK` and the checked catalog has no bundles,
    even if it contains lifecycle data for the package.
 4. **OPERATOR build** when PLCC is `OK`, bundles exist, and catalog lifecycle
-   data is missing or incomplete.
+   data is missing, incomplete, or mismatched.
 5. **OK** when all applicable checks pass.
 
 An explicit reporting exception overrides this recommendation with **SKIPPED**,
@@ -405,7 +441,7 @@ Any product rejection blocks a build recommendation, even if another product
 for that package translated successfully with duplicate validation disabled.
 Produced version evidence and all catalog issues are retained for investigation.
 
-Without a catalog, no completeness or regression checks are possible. Catalog
+Without a catalog, no completeness, regression, or equality checks are possible. Catalog
 evidence is nil, and issues can only report an absent PLCC package. Validation
 and mandatory translation still run. Successful assessment receives action `OK`,
 which renderers must qualify as **PLCC OK; catalog not checked**. It does not
@@ -418,10 +454,12 @@ The reporting command and renderers consume this model in two parts:
 1. **Summary:** catalog source followed by a blank line, total checked operators,
    skipped operators with the inline exclusion note, READY operators, then counts by PLCC status (`OK`, `MISSING`,
    `INCOMPLETE`, `INVALID`, `REGRESSED`, `DUPLICATE`), counts by catalog status
-   (`OK`, `MISSING`, `INCOMPLETE`, `NO BUNDLES`). Follow with
+   (`OK`, `MISSING`, `INCOMPLETE`, `NO BUNDLES`, `MISMATCH`). Follow with
    one row per operator: **Action | Operator | PLCC | Catalog | Skipped**. Counts describe
    operators, not findings; only non-skipped rows contribute to each applicable status
    breakdown. PLCC and catalog `X/Y` rows count as `INCOMPLETE`.
+   The additive JSON counter `summary.catalog.mismatch` counts primary MISMATCH
+   statuses, not mismatch findings hidden by coverage precedence.
    READY excludes skipped operators and requires a catalog check and both statuses `OK`;
    its denominator is the non-skipped count.
    The summary identifies the catalog source; the text report follows its table
@@ -464,6 +502,12 @@ lifecycle-only versions, zero bundles, absent packages, and coexisting validatio
 failures. Patch grouping, malformed versions, selected/all-package runs,
 absent/empty catalogs, input ownership, and deterministic results remain covered.
 No live API, registry, or `opm` is needed.
+
+Lifecycle equality tests cover individual field changes, unknown and malformed
+fields, optional values, list and phase ordering, versions without bundles,
+duplicate records, aliases, partially rejected products, coverage precedence,
+skips, input ownership, and deterministic output. CLI tests verify matching and
+changed-date cases with both rendered JSON and real local `opm` input.
 
 Renderer tests also cover status counts, complete package-grouped details,
 unchecked/empty selections, pipeline artifact ownership, literal source text,
