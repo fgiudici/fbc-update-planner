@@ -41,8 +41,8 @@ type Package struct {
 
 // Bundle identifies a catalog bundle and its original olm.package version.
 type Bundle struct {
-	Name    string
-	Version string
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 // Parse reads a stream of JSON catalog objects, as produced by opm render.

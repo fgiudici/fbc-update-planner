@@ -31,9 +31,9 @@ const (
 
 // ValidatorInfo identifies a registered validation rule.
 type ValidatorInfo struct {
-	Label string
-	Group string
-	Scope ValidationScope
+	Label string          `json:"label"`
+	Group string          `json:"group"`
+	Scope ValidationScope `json:"scope"`
 }
 
 // ValidationFailure is one rule's failure for a selected product.

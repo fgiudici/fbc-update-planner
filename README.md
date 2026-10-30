@@ -46,6 +46,8 @@ Builds the tool, runs it against the live PLCC API and writes output to the fbc-
 
 ## Report PLCC and catalog coverage
 
+`plcc-check` is built from source; release downloads currently include only `plcc2fbc`.
+
 ```shell
 make plcc-check
 bin/plcc-check --validators syntax,catalog \
