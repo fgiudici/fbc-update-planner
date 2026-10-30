@@ -30,8 +30,10 @@ import (
 	goyaml "sigs.k8s.io/yaml/goyaml.v2"
 )
 
-// RawMessage distinguishes an absent selection (all) from an explicit null or
-// empty selection (invalid), without adding YAML concerns to the assessment API.
+// reportConfig holds YAML operator selection and reporting exceptions.
+// Selected uses json.RawMessage to distinguish an absent selection (all) from
+// an explicit null or empty selection (invalid), without adding YAML concerns
+// to the assessment API.
 type reportConfig struct {
 	Selected json.RawMessage `json:"selected"`
 	Skipped  []skipGroup     `json:"skipped"`
